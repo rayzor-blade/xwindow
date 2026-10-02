@@ -1162,8 +1162,17 @@ pub unsafe fn window_set_title(handle: i32, title: Text) {
 }
 
 pub unsafe fn window_set_size(handle: i32, width: i32, height: i32) {
-    window(handle, (), |w| {
-        let _ = w.request_inner_size(LogicalSize::new(width.max(0), height.max(0)));
+    with((), |l| {
+        if let Some(open) = l.app.windows.get_mut(handle) {
+            // A size applied at once comes back here, with no Resized.
+            let size = LogicalSize::new(width.max(0), height.max(0));
+            if let Some(size) = open.window.request_inner_size(size) {
+                open.events.push_back(Event::Resized {
+                    width: i64::from(size.width),
+                    height: i64::from(size.height),
+                });
+            }
+        }
     });
 }
 
