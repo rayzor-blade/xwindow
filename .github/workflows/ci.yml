@@ -1,9 +1,18 @@
 name: CI
 
+# A push to main or the schedule publishes the rolling nightly, and a v* tag
+# that version. A manual run validates, and publishes when given a tag.
 on:
   push:
   pull_request:
+  schedule:
+    - cron: '43 3 * * *'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Tag to create and publish; leave empty to validate only'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -90,3 +99,104 @@ jobs:
         run: cargo test -p xwindow-check --test desktop
         env:
           XWINDOW_DESKTOP: "1"
+
+  release-binaries:
+    name: Release binary (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux-x86_64
+            executable: xwindow-haxe
+          - runner: windows-latest
+            platform: windows-x86_64
+            executable: xwindow-haxe.exe
+          - runner: macos-15
+            platform: macos-aarch64
+            executable: xwindow-haxe
+          - runner: macos-15-intel
+            platform: macos-x86_64
+            executable: xwindow-haxe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release generator
+        run: cargo build --release --locked -p xwindow-bindgen --bin xwindow-haxe
+      - name: Generate both Haxe surfaces
+        shell: bash
+        run: |
+          target/release/${{ matrix.executable }} ash generated/ash
+          target/release/${{ matrix.executable }} rayzor generated/rayzor
+          test -f generated/ash/window/Window.hx
+          test -f generated/rayzor/window/Window.hx
+      # An adapter can pin the surfaces as well as the generator that made
+      # them; publish checks every platform made the same ones.
+      - name: Stage release bundle
+        shell: bash
+        run: |
+          mkdir -p dist/xwindow/bin/${{ matrix.platform }}
+          cp target/release/${{ matrix.executable }} dist/xwindow/bin/${{ matrix.platform }}/
+          cp -R generated dist/xwindow/haxe
+          cp README.md LICENSE dist/xwindow/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xwindow-release-${{ matrix.platform }}
+          path: dist/xwindow
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [test, release-binaries]
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      inputs.release_tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Point the nightly tag at this build
+        if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        run: |
+          git tag --force nightly "$GITHUB_SHA"
+          git push --force origin refs/tags/nightly
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xwindow-release-*
+          path: artifacts
+
+      - name: Every platform generated the same surfaces
+        run: |
+          first=
+          for dir in artifacts/*/; do
+            if [ -z "$first" ]; then first=$dir; continue; fi
+            diff -r --strip-trailing-cr "$first/haxe" "$dir/haxe"
+          done
+
+      - name: Build release archives
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            (cd "$dir" && zip -qr "../../release/$name.zip" .)
+          done
+          ls -lh release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag || 'nightly' }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag || 'xwindow nightly' }}
+          files: release/*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/v') && inputs.release_tag == '' }}
+          make_latest: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '') && 'true' || 'false' }}
