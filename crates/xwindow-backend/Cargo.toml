@@ -1,0 +1,9 @@
+[package]
+name = "xwindow-backend"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Shared native and browser window backend source for xwindow adapters"
+
+[dependencies]

@@ -1,0 +1,15 @@
+[package]
+name = "xwindow-bindgen"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The xwindow API, its browser IDL, and the generators runtime adapters build with"
+
+[dependencies]
+x_idl = { workspace = true }
+xwindow-core = { workspace = true }
+
+[dev-dependencies]
+xwindow-backend = { path = "../xwindow-backend" }
+syn = { version = "2", features = ["full"] }

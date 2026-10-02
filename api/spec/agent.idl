@@ -1,0 +1,75 @@
+// xwindow's page agent: what a program in a page asks of its window beyond
+// the DOM operations window.idl carries, and the record the agent posts to
+// the program for each event the page fires. The wire generated from this
+// file and window.idl carries both; crates/xwindow-backend's agent.mjs
+// implements XwAgent on the page's thread.
+
+// CSSOM leaves CSSOMString to implementations, as DOMString or USVString;
+// the wire carries either as UTF-8. This lets it reach CSSStyleDeclaration.
+typedef DOMString CSSOMString;
+
+enum XwEventKind {
+  "resized", "focused", "occluded", "close-requested", "redraw-requested",
+  "scale-factor-changed", "theme-changed", "cursor-entered", "cursor-left",
+  "cursor-moved", "mouse-input", "mouse-wheel", "keyboard-input",
+  "modifiers-changed", "ime-enabled", "ime-preedit", "ime-commit",
+  "ime-disabled", "hovered-file", "dropped-file", "hovered-file-cancelled",
+  "touch", "pinch-gesture", "touchpad-pressure", "mouse-motion", "suspended",
+  "resumed", "fullscreen-changed", "screen"
+};
+
+// One event; which members it has depends on its kind. Positions and sizes
+// are in physical pixels.
+dictionary XwEvent {
+  required XwEventKind kind;
+  // PointerEvent.pointerId.
+  long device;
+  // A position, or a delta for a wheel, a pan or mouse motion.
+  double x;
+  double y;
+  unsigned long width;
+  unsigned long height;
+  // Window.devicePixelRatio, or a pinch's delta.
+  double scale;
+  // Focused, occluded, pressed, dark, fullscreen.
+  boolean on;
+  // MouseEvent.button.
+  unsigned short button;
+  // WheelEvent.deltaMode.
+  unsigned short unit;
+  // started 0, moved 1, ended 2, cancelled 3.
+  unsigned short phase;
+  // KeyboardEvent.location.
+  unsigned short location;
+  boolean repeat;
+  boolean synthetic;
+  // shift 1, control 2, alt 4, meta 8.
+  unsigned long modifiers;
+  // KeyboardEvent.code and .key; a file's name; IME text; a screen's label.
+  DOMString code;
+  DOMString key;
+  DOMString text;
+  // An IME cursor's UTF-8 byte offsets, -1 when there is none.
+  long start;
+  long end;
+  // PointerEvent.pressure, and a touchpad's click stage.
+  double pressure;
+  long stage;
+};
+
+// The agent itself, at handle 5. Sizes are CSS pixels; zero leaves a
+// dimension to the page. A request a browser takes only during a user's
+// input waits for the next one.
+[Exposed=Window]
+interface XwAgent {
+  undefined setSize(double width, double height);
+  undefined setMinSize(double width, double height);
+  undefined setMaxSize(double width, double height);
+  undefined setVisible(boolean visible);
+  undefined setFullscreen(boolean fullscreen);
+  undefined setCursorGrab(boolean locked);
+  undefined setCursorImage(Uint8Array rgba, unsigned long width, unsigned long height, unsigned long hotX, unsigned long hotY);
+  undefined focus();
+  undefined setImeAllowed(boolean allowed);
+  undefined setImeArea(double x, double y, double width, double height);
+};

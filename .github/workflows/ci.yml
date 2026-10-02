@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The browser check builds a shared-memory WASI module with the still
+      # unstable wasm atomic wait intrinsic, as Caribou and xgpu do.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-wasip1-threads
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: krdlab/setup-haxe@v1
+        with:
+          haxe-version: 4.3.6
+      - name: Linux window system headers
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+      - run: cargo test --workspace
+      - run: cargo build -p xwindow-check --target wasm32-wasip1-threads
+      - name: Generated Haxe compiles on both surfaces
+        run: |
+          cargo run -p xwindow-bindgen --bin xwindow-haxe -- ash generated/ash
+          cargo run -p xwindow-bindgen --bin xwindow-haxe -- rayzor generated/rayzor
+          haxe -cp generated/ash -cp examples/events -main Main -hl events.hl
+          haxe -cp generated/rayzor -cp examples/events -main Main --interp --no-output

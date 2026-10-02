@@ -1,0 +1,19 @@
+[package]
+name = "xwindow-check"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "A stand-in adapter that compiles xwindow's generated model and both backends"
+publish = false
+
+[build-dependencies]
+xwindow-backend = { path = "../xwindow-backend" }
+xwindow-bindgen = { path = "../xwindow-bindgen" }
+
+[dependencies]
+xwindow-core = { workspace = true }
+
+[target.'cfg(not(target_os = "wasi"))'.dependencies]
+winit = "0.30"
+raw-window-handle = "0.6"

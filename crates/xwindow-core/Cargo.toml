@@ -1,0 +1,10 @@
+[package]
+name = "xwindow-core"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Runtime-neutral key lists, window handles and surface contract for xwindow"
+
+[dependencies]
+raw-window-handle = "0.6"
