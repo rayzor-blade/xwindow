@@ -27,26 +27,32 @@ class Main {
 		while (running) {
 			switch (window.wait(0.5)) {
 				case None:
-				case CloseRequested | Destroyed:
+				case Closed | Destroyed:
 					running = false;
 				case Resized(width, height):
 					trace('resized to ${width}x${height}');
-				case CursorMoved(device, x, y):
+				case CursorMoved(x, y, device):
 					trace('cursor $device at $x, $y');
-				case MouseInput(device, button, code, pressed):
-					trace('mouse $device: $button ${pressed ? "down" : "up"}');
-				case MouseWheel(device, unit, x, y, phase):
-					trace('wheel $device: $x, $y $unit');
-				case KeyboardInput(device, code, scancode, key, character, text, location, pressed, repeat, synthetic):
-					trace('key $code ($key "$character") ${pressed ? "down" : "up"} text "$text"');
-					if (code == KeyCode.Escape && pressed)
-						running = false;
-				case ModifiersChanged(shift, control, alt, superKey):
-					trace('modifiers shift=$shift control=$control alt=$alt super=$superKey');
-				case ImeCommit(text):
+				case MouseInput(state, button, device):
+					trace('mouse $device: $button $state');
+				case MouseWheel(LineDelta(x, y), phase, device):
+					trace('wheel $device: $x, $y lines');
+				case MouseWheel(PixelDelta(x, y), phase, device):
+					trace('wheel $device: $x, $y pixels');
+				case KeyboardInput(device, Input(physical, logical, text, location, state, repeat, _), synthetic):
+					trace('key $physical $logical $text $location $state repeat=$repeat synthetic=$synthetic');
+					switch [physical, state] {
+						case [Code(KeyCode.Escape), Pressed]: running = false;
+						case _:
+					}
+				case ModifiersChanged(State(shift, control, alt, superKey, leftShift, _, _, _, _, _, _, _)):
+					trace('modifiers shift=$shift ($leftShift) control=$control alt=$alt super=$superKey');
+				case Ime(Commit(text)):
 					trace('typed "$text"');
-				case ScaleFactorChanged(scaleFactor):
-					trace('scale $scaleFactor');
+				case DroppedFile(Utf8(path)):
+					trace('dropped $path');
+				case ScaleFactorChanged(scale):
+					trace('scale $scale');
 				case RedrawRequested:
 					trace("redraw");
 				case other:

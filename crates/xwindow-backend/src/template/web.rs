@@ -19,8 +19,10 @@ use xwindow_core::{Kind, Slab};
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::wire::{self, Handle, Mailbox, Queue};
 use crate::{
-    CursorGrab, CursorIcon, Event, Key, KeyCode, KeyLocation, MouseButton, ScaleSizing, ScrollUnit,
-    Theme, TouchPhase, WindowAttributes,
+    CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, Key, KeyCode, KeyEvent,
+    KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton, MouseElementState,
+    MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalText, PhysicalKey, ScaleSizing,
+    Theme, TouchForce, TouchPhase, WindowAttributes,
 };
 
 /// The name a host starts the agent by: it imports `xwindow.mjs` beside the
@@ -152,7 +154,7 @@ impl Page {
 
     fn event(&mut self, e: wire::XwEvent) -> Option<Event> {
         use wire::XwEventKind as K;
-        let device = e.device.unwrap_or(0);
+        let device_id = e.device.unwrap_or(0);
         let x = e.x.unwrap_or(0.0);
         let y = e.y.unwrap_or(0.0);
         let on = e.on.unwrap_or(false);
@@ -165,8 +167,8 @@ impl Page {
                     self.scale = scale;
                 }
                 Event::Resized {
-                    width: self.width,
-                    height: self.height,
+                    width: i64::from(self.width),
+                    height: i64::from(self.height),
                 }
             }
             K::Focused => {
@@ -174,7 +176,7 @@ impl Page {
                 Event::Focused { focused: on }
             }
             K::Occluded => Event::Occluded { occluded: on },
-            K::CloseRequested => Event::CloseRequested,
+            K::CloseRequested => Event::Closed,
             K::RedrawRequested => Event::RedrawRequested,
             K::ScaleFactorChanged => {
                 let scale = e.scale.unwrap_or(1.0);
@@ -187,7 +189,9 @@ impl Page {
                     );
                 }
                 self.scale = scale;
-                Event::ScaleFactorChanged { scaleFactor: scale }
+                Event::ScaleFactorChanged {
+                    scale_factor: scale,
+                }
             }
             K::ThemeChanged => {
                 self.dark = on;
@@ -195,108 +199,151 @@ impl Page {
                     theme: if on { Theme::Dark } else { Theme::Light },
                 }
             }
-            K::CursorEntered => Event::CursorEntered { device },
-            K::CursorLeft => Event::CursorLeft { device },
-            K::CursorMoved => Event::CursorMoved { device, x, y },
-            K::MouseInput => {
-                let code = i32::from(e.button.unwrap_or(0));
-                let button = match code {
+            K::CursorEntered => Event::CursorEntered { device_id },
+            K::CursorLeft => Event::CursorLeft { device_id },
+            K::CursorMoved => Event::CursorMoved { x, y, device_id },
+            K::MouseInput => Event::MouseInput {
+                state: element_state(on),
+                button: match e.button.unwrap_or(0) {
                     0 => MouseButton::Left,
                     1 => MouseButton::Middle,
                     2 => MouseButton::Right,
                     3 => MouseButton::Back,
                     4 => MouseButton::Forward,
-                    _ => MouseButton::Other,
-                };
-                Event::MouseInput {
-                    device,
-                    button,
-                    code: if button == MouseButton::Other {
-                        code
-                    } else {
-                        0
+                    button => MouseButton::Other {
+                        button: i32::from(button),
                     },
-                    pressed: on,
-                }
-            }
+                },
+                device_id,
+            },
             // A browser's delta points the way the page scrolls; winit's, the
             // way the content moves.
             K::MouseWheel => Event::MouseWheel {
-                device,
-                unit: if e.unit.unwrap_or(0) == 0 {
-                    ScrollUnit::Pixel
+                delta: if e.unit.unwrap_or(0) == 0 {
+                    MouseScrollDelta::PixelDelta { x: -x, y: -y }
                 } else {
-                    ScrollUnit::Line
+                    MouseScrollDelta::LineDelta { x: -x, y: -y }
                 },
-                x: -x,
-                y: -y,
                 phase: TouchPhase::Moved,
+                device_id,
             },
             K::KeyboardInput => {
-                let code_name = e.code.clone().unwrap_or_default();
-                let (key, character) = logical_key(e.key.as_deref().unwrap_or(""));
-                let text = match key {
-                    Key::Character if on => character.clone(),
-                    Key::Space if on => " ".to_owned(),
-                    _ => String::new(),
+                let code = e.code.clone().unwrap_or_default();
+                let logical_key = logical_key(e.key.as_deref().unwrap_or(""), &code);
+                let text = match &logical_key {
+                    Key::Character { text } if on => OptionalText::Some { text: text.clone() },
+                    Key::Named {
+                        key: NamedKey::Space,
+                    } if on => OptionalText::Some {
+                        text: " ".to_owned(),
+                    },
+                    _ => OptionalText::None,
                 };
                 Event::KeyboardInput {
-                    device,
-                    code: key_code(&code_name),
-                    scancode: 0,
-                    key,
-                    character,
-                    text,
-                    location: match e.location.unwrap_or(0) {
-                        1 => KeyLocation::Left,
-                        2 => KeyLocation::Right,
-                        3 => KeyLocation::Numpad,
-                        _ => KeyLocation::Standard,
+                    device_id,
+                    event: KeyEvent::Input {
+                        physical_key: match key_code(&code) {
+                            KeyCode::Unrecognized => PhysicalKey::Unidentified {
+                                code: NativeKeyCode::Unidentified,
+                            },
+                            code => PhysicalKey::Code { code },
+                        },
+                        logical_key,
+                        text,
+                        location: match e.location.unwrap_or(0) {
+                            1 => KeyLocation::Left,
+                            2 => KeyLocation::Right,
+                            3 => KeyLocation::Numpad,
+                            _ => KeyLocation::Standard,
+                        },
+                        state: element_state(on),
+                        repeat: e.repeat.unwrap_or(false),
+                        supplement: KeySupplement::Unavailable,
                     },
-                    pressed: on,
-                    repeat: e.repeat.unwrap_or(false),
-                    synthetic: e.synthetic.unwrap_or(false),
+                    is_synthetic: e.synthetic.unwrap_or(false),
                 }
             }
             K::ModifiersChanged => {
-                let m = e.modifiers.unwrap_or(0);
+                let held = e.modifiers.unwrap_or(0);
+                let sides = e.sides.unwrap_or(0);
+                let side = |bit: u32| {
+                    if sides & bit != 0 {
+                        ModifiersKeyState::Pressed
+                    } else {
+                        ModifiersKeyState::Unknown
+                    }
+                };
                 Event::ModifiersChanged {
-                    shift: m & 1 != 0,
-                    control: m & 2 != 0,
-                    alt: m & 4 != 0,
-                    superKey: m & 8 != 0,
+                    modifiers: Modifiers::State {
+                        shift: held & 1 != 0,
+                        control: held & 2 != 0,
+                        alt: held & 4 != 0,
+                        super_key: held & 8 != 0,
+                        left_shift: side(1),
+                        right_shift: side(2),
+                        left_control: side(4),
+                        right_control: side(8),
+                        left_alt: side(16),
+                        right_alt: side(32),
+                        left_super: side(64),
+                        right_super: side(128),
+                    },
                 }
             }
-            K::ImeEnabled => Event::ImeEnabled,
-            K::ImePreedit => Event::ImePreedit {
-                text,
-                start: e.start.unwrap_or(-1),
-                end: e.end.unwrap_or(-1),
+            K::ImeEnabled => Event::Ime {
+                event: Ime::Enabled,
             },
-            K::ImeCommit => Event::ImeCommit { text },
-            K::ImeDisabled => Event::ImeDisabled,
-            K::HoveredFile => Event::HoveredFile { path: text },
-            K::DroppedFile => Event::DroppedFile { path: text },
+            K::ImePreedit => Event::Ime {
+                event: Ime::Preedit {
+                    text,
+                    cursor: match (e.start, e.end) {
+                        (Some(start), Some(end)) if start >= 0 && end >= 0 => CursorRange::Range {
+                            start: i64::from(start),
+                            end: i64::from(end),
+                        },
+                        _ => CursorRange::None,
+                    },
+                },
+            },
+            K::ImeCommit => Event::Ime {
+                event: Ime::Commit { text },
+            },
+            K::ImeDisabled => Event::Ime {
+                event: Ime::Disabled,
+            },
+            // A page learns a file's name when it is dropped, never its path.
+            K::HoveredFile => Event::HoveredFile {
+                path: FilePath::Utf8 { path: text },
+            },
+            K::DroppedFile => Event::DroppedFile {
+                path: FilePath::Utf8 { path: text },
+            },
             K::HoveredFileCancelled => Event::HoveredFileCancelled,
             K::Touch => Event::Touch {
-                device,
-                id: i64::from(device),
+                device_id,
                 phase: touch_phase(e.phase.unwrap_or(1)),
                 x,
                 y,
-                force: e.pressure.unwrap_or(-1.0),
+                force: match e.pressure {
+                    Some(force) => TouchForce::Normalized { force },
+                    None => TouchForce::None,
+                },
+                id: i64::from(device_id),
             },
             K::PinchGesture => Event::PinchGesture {
-                device,
+                device_id,
                 delta: e.scale.unwrap_or(0.0),
                 phase: touch_phase(e.phase.unwrap_or(1)),
             },
             K::TouchpadPressure => Event::TouchpadPressure {
-                device,
+                device_id,
                 pressure: e.pressure.unwrap_or(0.0),
                 stage: i64::from(e.stage.unwrap_or(0)),
             },
-            K::MouseMotion => Event::MouseMotion { device, x, y },
+            K::MouseMotion => Event::Device {
+                device_id,
+                event: DeviceEvent::MouseMotion { x, y },
+            },
             K::Suspended => Event::Suspended,
             K::Resumed => Event::Resumed,
             K::FullscreenChanged => {
@@ -315,6 +362,14 @@ impl Page {
     }
 }
 
+fn element_state(pressed: bool) -> MouseElementState {
+    if pressed {
+        MouseElementState::Pressed
+    } else {
+        MouseElementState::Released
+    }
+}
+
 fn touch_phase(phase: u16) -> TouchPhase {
     match phase {
         0 => TouchPhase::Started,
@@ -330,36 +385,55 @@ fn key_code(name: &str) -> KeyCode {
         ($($name:ident),* $(,)?) => {
             match name {
                 $(stringify!($name) => KeyCode::$name,)*
-                _ => KeyCode::Unidentified,
+                _ => KeyCode::Unrecognized,
             }
         };
     }
     xwindow_core::key_codes!(codes)
 }
 
-/// A key by its `KeyboardEvent.key` value, and the text a character or
-/// unnamed key carries.
-fn logical_key(key: &str) -> (Key, String) {
+/// A key by its `KeyboardEvent.key` value: a named key, or the characters
+/// the key types, or the value itself when it is neither.
+fn logical_key(key: &str, code: &str) -> Key {
     macro_rules! named {
         ($($name:ident),* $(,)?) => {
             match key {
-                $(stringify!($name) => return (Key::$name, String::new()),)*
+                $(stringify!($name) => return Key::Named { key: NamedKey::$name },)*
                 _ => {}
             }
         };
     }
     match key {
-        " " => return (Key::Space, String::new()),
-        "Dead" => return (Key::Dead, String::new()),
-        "Unidentified" | "" => return (Key::Unidentified, String::new()),
+        " " => {
+            return Key::Named {
+                key: NamedKey::Space,
+            };
+        }
+        "Dead" => {
+            return Key::Dead {
+                character: OptionalText::None,
+            };
+        }
+        "Unidentified" | "" => {
+            return Key::Unidentified {
+                key: NativeKey::Web {
+                    key: code.to_owned(),
+                },
+            };
+        }
         _ => {}
     }
     xwindow_core::named_keys!(named);
-    // A key value is a named key or the characters the key types.
     if key.chars().count() <= 2 {
-        (Key::Character, key.to_owned())
+        Key::Character {
+            text: key.to_owned(),
+        }
     } else {
-        (Key::Unidentified, key.to_owned())
+        Key::Unidentified {
+            key: NativeKey::Web {
+                key: key.to_owned(),
+            },
+        }
     }
 }
 

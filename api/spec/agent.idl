@@ -45,6 +45,9 @@ dictionary XwEvent {
   boolean synthetic;
   // shift 1, control 2, alt 4, meta 8.
   unsigned long modifiers;
+  // The side each is held on: left shift 1, right shift 2, left control 4,
+  // right control 8, left alt 16, right alt 32, left meta 64, right meta 128.
+  unsigned long sides;
   // KeyboardEvent.code and .key; a file's name; IME text; a screen's label.
   DOMString code;
   DOMString key;

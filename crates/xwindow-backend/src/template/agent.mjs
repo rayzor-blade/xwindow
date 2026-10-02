@@ -183,10 +183,17 @@ export function start({ memory, address, canvas }) {
     post({ kind: "mouse-wheel", unit: e.deltaMode, x: e.deltaX * scale, y: e.deltaY * scale });
   }, { passive: false });
 
-  // Keys, and the modifiers they change.
+  // Keys, and the modifiers they change, with the side each is held on.
   let lastModifiers = -1;
+  let sides = 0;
+  const SIDE = { Shift: 1, Control: 4, Alt: 16, Meta: 64 };
   const key = (pressed) => (e) => {
     if (pressed) runGated();
+    const side = SIDE[e.key];
+    if (side && (e.location === 1 || e.location === 2)) {
+      const bit = e.location === 1 ? side : side * 2;
+      sides = pressed ? sides | bit : sides & ~bit;
+    }
     post({
       kind: "keyboard-input",
       on: pressed,
@@ -197,9 +204,9 @@ export function start({ memory, address, canvas }) {
       synthetic: !e.isTrusted,
     });
     const mods = modifiers(e);
-    if (mods !== lastModifiers) {
-      lastModifiers = mods;
-      post({ kind: "modifiers-changed", modifiers: mods });
+    if (((mods << 8) | sides) !== lastModifiers) {
+      lastModifiers = (mods << 8) | sides;
+      post({ kind: "modifiers-changed", modifiers: mods, sides });
     }
     // Keys the program handles should not also scroll or navigate the page.
     // While text input is allowed they keep their default action, which is

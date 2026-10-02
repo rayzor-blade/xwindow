@@ -33,12 +33,12 @@ var window = Window.open(attributes);
 var running = true;
 while (running) {
 	switch (window.wait(0.5)) {
-		case CloseRequested:
+		case Closed:
 			running = false;
 		case Resized(width, height):
 			trace('${width}x${height}');
-		case KeyboardInput(device, code, scancode, key, character, text, location, pressed, repeat, synthetic):
-			if (code == KeyCode.Escape && pressed) running = false;
+		case KeyboardInput(_, Input(Code(Escape), _, _, _, Pressed, _, _), _):
+			running = false;
 		case _:
 	}
 }
@@ -46,12 +46,25 @@ window.close();
 ```
 
 `Window.poll()` returns the next event without waiting, and `wait(seconds)`
-waits for one. Both return `Event.None` when there is none. Every runtime
-gets `Event` as a real enum with payloads:
+waits for one. Both return `Event.None` when there is none.
+
+Events have the shapes cb_window gave them, which are winit's:
+
+- A key press is `KeyboardInput(device, KeyEvent.Input(...), synthetic)`.
+  The physical key is a `KeyCode` or the platform's own code. The logical
+  key is named, a character, dead or the platform's. The press also
+  carries its text, location, state and repeat, and the key without
+  modifiers where the platform says.
+- `Modifiers` holds the side each modifier is held on.
+- `FilePath` keeps the exact bytes of a path that is not Unicode.
+- `TouchForce` keeps calibrated force.
+- `OptionalText` keeps none distinct from empty.
+
+Every runtime gets `Event` as a real enum with nested payloads:
 
 - Caribou builds it natively.
-- Ash and Rayzor read the event's fields through generated getters, and
-  their generated externs build the enum from them.
+- Ash and Rayzor read each field through a generated getter, and their
+  generated externs build the enum from them.
 
 [`examples/events/Main.hx`](examples/events/Main.hx) builds unchanged against
 each runtime's package.
@@ -70,7 +83,7 @@ The declaration is [`api/window.api.rs`](api/window.api.rs). It covers:
 | Activation tokens | Requests, answered by event |
 | Events | All 28 of winit 0.30's window events, its 7 raw device events, and its application lifecycle |
 
-`KeyCode` and `Key` list winit's 194 physical and 306 named keys. Those are
+`KeyCode` and `NamedKey` list winit's 194 physical and 306 named keys. Those are
 the W3C names a browser reports too.
 
 ## Runtime support

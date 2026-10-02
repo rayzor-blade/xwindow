@@ -69,6 +69,10 @@ pub struct Buffer(*mut Vec<u8>);
 impl Buffer {
     pub const NULL: Self = Self(std::ptr::null_mut());
 
+    pub fn new(bytes: &[u8]) -> Self {
+        Self(Box::into_raw(Box::new(bytes.to_vec())))
+    }
+
     pub unsafe fn as_slice(&self) -> &[u8] {
         if self.0.is_null() {
             &[]

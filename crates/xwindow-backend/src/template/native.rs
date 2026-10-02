@@ -26,8 +26,11 @@ use xwindow_core::{Kind, Slab};
 
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::{
-    Attention, CursorGrab, CursorIcon, Event, Key, KeyCode, KeyLocation, MouseButton, ScaleSizing,
-    ScrollUnit, Theme, TouchPhase, WindowAttributes, WindowLevel,
+    Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, Key,
+    KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
+    MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalFloat,
+    OptionalText, PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, VariantBytes,
+    WindowAttributes, WindowLevel,
 };
 
 struct Open {
@@ -272,8 +275,10 @@ impl ApplicationHandler for App {
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, id: DeviceId, event: native::DeviceEvent) {
-        let device = self.device(id);
-        let event = device_event(device, event);
+        let event = Event::Device {
+            device_id: self.device(id),
+            event: device_event(event),
+        };
         if let Some(open) = self
             .device_target()
             .and_then(|handle| self.windows.get_mut(handle))
@@ -298,20 +303,20 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
             }
         }
         WindowEvent::Resized(size) => Event::Resized {
-            width: clamp(size.width),
-            height: clamp(size.height),
+            width: i64::from(size.width),
+            height: i64::from(size.height),
         },
         WindowEvent::Moved(position) => Event::Moved {
             x: position.x,
             y: position.y,
         },
-        WindowEvent::CloseRequested => Event::CloseRequested,
+        WindowEvent::CloseRequested => Event::Closed,
         WindowEvent::Destroyed => Event::Destroyed,
         WindowEvent::DroppedFile(path) => Event::DroppedFile {
-            path: path.to_string_lossy().into_owned(),
+            path: file_path(path),
         },
         WindowEvent::HoveredFile(path) => Event::HoveredFile {
-            path: path.to_string_lossy().into_owned(),
+            path: file_path(path),
         },
         WindowEvent::HoveredFileCancelled => Event::HoveredFileCancelled,
         WindowEvent::Focused(focused) => Event::Focused { focused },
@@ -319,92 +324,79 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
             device_id,
             event,
             is_synthetic,
-        } => {
-            let (code, scancode) = physical_key(event.physical_key);
-            let (key, character) = logical_key(&event.logical_key);
-            Event::KeyboardInput {
-                device: app.device(device_id),
-                code,
-                scancode,
-                key,
-                character,
-                text: event.text.map(|t| t.to_string()).unwrap_or_default(),
-                location: match event.location {
-                    keys::KeyLocation::Standard => KeyLocation::Standard,
-                    keys::KeyLocation::Left => KeyLocation::Left,
-                    keys::KeyLocation::Right => KeyLocation::Right,
-                    keys::KeyLocation::Numpad => KeyLocation::Numpad,
+        } => Event::KeyboardInput {
+            device_id: app.device(device_id),
+            event: key_event(event),
+            is_synthetic,
+        },
+        WindowEvent::ModifiersChanged(modifiers) => Event::ModifiersChanged {
+            modifiers: Modifiers::State {
+                shift: modifiers.state().shift_key(),
+                control: modifiers.state().control_key(),
+                alt: modifiers.state().alt_key(),
+                super_key: modifiers.state().super_key(),
+                left_shift: side(modifiers.lshift_state()),
+                right_shift: side(modifiers.rshift_state()),
+                left_control: side(modifiers.lcontrol_state()),
+                right_control: side(modifiers.rcontrol_state()),
+                left_alt: side(modifiers.lalt_state()),
+                right_alt: side(modifiers.ralt_state()),
+                left_super: side(modifiers.lsuper_state()),
+                right_super: side(modifiers.rsuper_state()),
+            },
+        },
+        WindowEvent::Ime(ime) => Event::Ime {
+            event: match ime {
+                native::Ime::Enabled => Ime::Enabled,
+                native::Ime::Preedit(text, cursor) => Ime::Preedit {
+                    text,
+                    cursor: cursor.map_or(CursorRange::None, |(start, end)| CursorRange::Range {
+                        start: start as i64,
+                        end: end as i64,
+                    }),
                 },
-                pressed: event.state.is_pressed(),
-                repeat: event.repeat,
-                synthetic: is_synthetic,
-            }
-        }
-        WindowEvent::ModifiersChanged(modifiers) => {
-            let state = modifiers.state();
-            Event::ModifiersChanged {
-                shift: state.shift_key(),
-                control: state.control_key(),
-                alt: state.alt_key(),
-                superKey: state.super_key(),
-            }
-        }
-        WindowEvent::Ime(ime) => match ime {
-            native::Ime::Enabled => Event::ImeEnabled,
-            native::Ime::Preedit(text, cursor) => {
-                let (start, end) = cursor.map_or((-1, -1), |(s, e)| (s as i32, e as i32));
-                Event::ImePreedit { text, start, end }
-            }
-            native::Ime::Commit(text) => Event::ImeCommit { text },
-            native::Ime::Disabled => Event::ImeDisabled,
+                native::Ime::Commit(text) => Ime::Commit { text },
+                native::Ime::Disabled => Ime::Disabled,
+            },
         },
         WindowEvent::CursorMoved {
             device_id,
             position,
         } => Event::CursorMoved {
-            device: app.device(device_id),
             x: position.x,
             y: position.y,
+            device_id: app.device(device_id),
         },
         WindowEvent::CursorEntered { device_id } => Event::CursorEntered {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
         },
         WindowEvent::CursorLeft { device_id } => Event::CursorLeft {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
         },
         WindowEvent::MouseWheel {
             device_id,
             delta,
             phase,
-        } => {
-            let (unit, x, y) = scroll(delta);
-            Event::MouseWheel {
-                device: app.device(device_id),
-                unit,
-                x,
-                y,
-                phase: touch_phase(phase),
-            }
-        }
+        } => Event::MouseWheel {
+            delta: scroll(delta),
+            phase: touch_phase(phase),
+            device_id: app.device(device_id),
+        },
         WindowEvent::MouseInput {
             device_id,
             state,
             button,
-        } => {
-            let (button, code) = mouse_button(button);
-            Event::MouseInput {
-                device: app.device(device_id),
-                button,
-                code,
-                pressed: state.is_pressed(),
-            }
-        }
+        } => Event::MouseInput {
+            state: element_state(state),
+            button: mouse_button(button),
+            device_id: app.device(device_id),
+        },
         WindowEvent::PinchGesture {
             device_id,
             delta,
             phase,
         } => Event::PinchGesture {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
             delta,
             phase: touch_phase(phase),
         },
@@ -413,20 +405,20 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
             delta,
             phase,
         } => Event::PanGesture {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
             x: f64::from(delta.x),
             y: f64::from(delta.y),
             phase: touch_phase(phase),
         },
         WindowEvent::DoubleTapGesture { device_id } => Event::DoubleTapGesture {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
         },
         WindowEvent::RotationGesture {
             device_id,
             delta,
             phase,
         } => Event::RotationGesture {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
             delta: f64::from(delta),
             phase: touch_phase(phase),
         },
@@ -435,7 +427,7 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
             pressure,
             stage,
         } => Event::TouchpadPressure {
-            device: app.device(device_id),
+            device_id: app.device(device_id),
             pressure: f64::from(pressure),
             stage,
         },
@@ -444,22 +436,35 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
             axis,
             value,
         } => Event::AxisMotion {
-            device: app.device(device_id),
-            axis: axis as i32,
+            device_id: app.device(device_id),
+            axis: i64::from(axis),
             value,
         },
         WindowEvent::Touch(touch) => Event::Touch {
-            device: app.device(touch.device_id),
-            // All 64 bits, as Haxe's Int64 keeps them.
-            id: touch.id as i64,
+            device_id: app.device(touch.device_id),
             phase: touch_phase(touch.phase),
             x: touch.location.x,
             y: touch.location.y,
-            force: touch.force.map_or(-1.0, |f| f.normalized()),
+            force: match touch.force {
+                None => TouchForce::None,
+                Some(native::Force::Calibrated {
+                    force,
+                    max_possible_force,
+                    altitude_angle,
+                }) => TouchForce::Calibrated {
+                    force,
+                    max_possible_force,
+                    altitude_angle: altitude_angle
+                        .map_or(OptionalFloat::None, |value| OptionalFloat::Some { value }),
+                },
+                Some(native::Force::Normalized(force)) => TouchForce::Normalized { force },
+            },
+            // All 64 bits, as Haxe's Int64 keeps them.
+            id: touch.id as i64,
         },
-        WindowEvent::ScaleFactorChanged { scale_factor, .. } => Event::ScaleFactorChanged {
-            scaleFactor: scale_factor,
-        },
+        WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+            Event::ScaleFactorChanged { scale_factor }
+        }
         WindowEvent::ThemeChanged(theme) => Event::ThemeChanged {
             theme: theme_of(theme),
         },
@@ -468,46 +473,130 @@ fn window_event(app: &mut App, event: WindowEvent) -> Event {
     }
 }
 
-fn device_event(device: i32, event: native::DeviceEvent) -> Event {
+fn device_event(event: native::DeviceEvent) -> DeviceEvent {
     match event {
-        native::DeviceEvent::Added => Event::DeviceAdded { device },
-        native::DeviceEvent::Removed => Event::DeviceRemoved { device },
-        native::DeviceEvent::MouseMotion { delta: (x, y) } => Event::MouseMotion { device, x, y },
-        native::DeviceEvent::MouseWheel { delta } => {
-            let (unit, x, y) = scroll(delta);
-            Event::DeviceWheel { device, unit, x, y }
-        }
-        native::DeviceEvent::Motion { axis, value } => Event::DeviceAxis {
-            device,
-            axis: axis as i32,
+        native::DeviceEvent::Added => DeviceEvent::Added,
+        native::DeviceEvent::Removed => DeviceEvent::Removed,
+        native::DeviceEvent::MouseMotion { delta: (x, y) } => DeviceEvent::MouseMotion { x, y },
+        native::DeviceEvent::MouseWheel { delta } => DeviceEvent::MouseWheel {
+            delta: scroll(delta),
+        },
+        native::DeviceEvent::Motion { axis, value } => DeviceEvent::Motion {
+            axis: i64::from(axis),
             value,
         },
-        native::DeviceEvent::Button { button, state } => Event::DeviceButton {
-            device,
-            button: button as i32,
-            pressed: state.is_pressed(),
+        native::DeviceEvent::Button { button, state } => DeviceEvent::Button {
+            button: i64::from(button),
+            state: element_state(state),
         },
-        native::DeviceEvent::Key(key) => {
-            let (code, scancode) = physical_key(key.physical_key);
-            Event::DeviceKey {
-                device,
-                code,
-                scancode,
-                pressed: key.state.is_pressed(),
+        native::DeviceEvent::Key(key) => DeviceEvent::Key {
+            physical_key: physical_key(key.physical_key),
+            state: element_state(key.state),
+        },
+    }
+}
+
+/// A path as Unicode when it is, otherwise its exact bytes.
+fn file_path(path: std::path::PathBuf) -> FilePath {
+    match path.into_os_string().into_string() {
+        Ok(path) => FilePath::Utf8 { path },
+        Err(path) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStringExt;
+                FilePath::UnixBytes {
+                    bytes: VariantBytes(path.into_vec()),
+                }
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::ffi::OsStrExt;
+                FilePath::WindowsWide {
+                    utf16le: VariantBytes(path.encode_wide().flat_map(u16::to_le_bytes).collect()),
+                }
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                FilePath::Utf8 {
+                    path: path.to_string_lossy().into_owned(),
+                }
             }
         }
     }
 }
 
-/// A size winit gives as `u32`, as the `Int` every runtime has.
-fn clamp(value: u32) -> i32 {
-    i32::try_from(value).unwrap_or(i32::MAX)
+fn key_event(event: native::KeyEvent) -> KeyEvent {
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox"
+    ))]
+    let supplement = {
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        KeySupplement::Supplement {
+            key_without_modifiers: logical_key(&event.key_without_modifiers()),
+            text_with_all_modifiers: optional_text(event.text_with_all_modifiers()),
+        }
+    };
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "redox"
+    )))]
+    let supplement = KeySupplement::Unavailable;
+    KeyEvent::Input {
+        physical_key: physical_key(event.physical_key),
+        logical_key: logical_key(&event.logical_key),
+        text: optional_text(event.text.as_deref()),
+        location: match event.location {
+            keys::KeyLocation::Standard => KeyLocation::Standard,
+            keys::KeyLocation::Left => KeyLocation::Left,
+            keys::KeyLocation::Right => KeyLocation::Right,
+            keys::KeyLocation::Numpad => KeyLocation::Numpad,
+        },
+        state: element_state(event.state),
+        repeat: event.repeat,
+        supplement,
+    }
 }
 
-fn scroll(delta: native::MouseScrollDelta) -> (ScrollUnit, f64, f64) {
+fn optional_text(text: Option<&str>) -> OptionalText {
+    text.map_or(OptionalText::None, |text| OptionalText::Some {
+        text: text.to_owned(),
+    })
+}
+
+fn side(state: keys::ModifiersKeyState) -> ModifiersKeyState {
+    match state {
+        keys::ModifiersKeyState::Pressed => ModifiersKeyState::Pressed,
+        keys::ModifiersKeyState::Unknown => ModifiersKeyState::Unknown,
+    }
+}
+
+fn element_state(state: native::ElementState) -> MouseElementState {
+    match state {
+        native::ElementState::Pressed => MouseElementState::Pressed,
+        native::ElementState::Released => MouseElementState::Released,
+    }
+}
+
+fn scroll(delta: native::MouseScrollDelta) -> MouseScrollDelta {
     match delta {
-        native::MouseScrollDelta::LineDelta(x, y) => (ScrollUnit::Line, f64::from(x), f64::from(y)),
-        native::MouseScrollDelta::PixelDelta(p) => (ScrollUnit::Pixel, p.x, p.y),
+        native::MouseScrollDelta::LineDelta(x, y) => MouseScrollDelta::LineDelta {
+            x: f64::from(x),
+            y: f64::from(y),
+        },
+        native::MouseScrollDelta::PixelDelta(p) => MouseScrollDelta::PixelDelta { x: p.x, y: p.y },
     }
 }
 
@@ -520,14 +609,16 @@ fn touch_phase(phase: native::TouchPhase) -> TouchPhase {
     }
 }
 
-fn mouse_button(button: native::MouseButton) -> (MouseButton, i32) {
+fn mouse_button(button: native::MouseButton) -> MouseButton {
     match button {
-        native::MouseButton::Left => (MouseButton::Left, 0),
-        native::MouseButton::Right => (MouseButton::Right, 0),
-        native::MouseButton::Middle => (MouseButton::Middle, 0),
-        native::MouseButton::Back => (MouseButton::Back, 0),
-        native::MouseButton::Forward => (MouseButton::Forward, 0),
-        native::MouseButton::Other(code) => (MouseButton::Other, i32::from(code)),
+        native::MouseButton::Left => MouseButton::Left,
+        native::MouseButton::Right => MouseButton::Right,
+        native::MouseButton::Middle => MouseButton::Middle,
+        native::MouseButton::Back => MouseButton::Back,
+        native::MouseButton::Forward => MouseButton::Forward,
+        native::MouseButton::Other(button) => MouseButton::Other {
+            button: i32::from(button),
+        },
     }
 }
 
@@ -538,36 +629,56 @@ fn theme_of(theme: windows::Theme) -> Theme {
     }
 }
 
-/// A physical key as the declaration's `KeyCode`, and the platform's code
-/// for a key winit does not name.
-fn physical_key(key: keys::PhysicalKey) -> (KeyCode, i32) {
+/// A size winit gives as `u32`, as the `Int` every runtime has.
+fn clamp(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+fn physical_key(key: keys::PhysicalKey) -> PhysicalKey {
     macro_rules! codes {
         ($($name:ident),* $(,)?) => {
             match key {
-                $(keys::PhysicalKey::Code(keys::KeyCode::$name) => (KeyCode::$name, 0),)*
-                keys::PhysicalKey::Code(_) => (KeyCode::Unidentified, 0),
-                keys::PhysicalKey::Unidentified(native) => (KeyCode::Unidentified, match native {
-                    keys::NativeKeyCode::Unidentified => 0,
-                    keys::NativeKeyCode::Android(code) | keys::NativeKeyCode::Xkb(code) => code as i32,
-                    keys::NativeKeyCode::MacOS(code) | keys::NativeKeyCode::Windows(code) => i32::from(code),
-                }),
+                $(keys::PhysicalKey::Code(keys::KeyCode::$name) => {
+                    PhysicalKey::Code { code: KeyCode::$name }
+                })*
+                keys::PhysicalKey::Code(_) => PhysicalKey::Code { code: KeyCode::Unrecognized },
+                keys::PhysicalKey::Unidentified(native) => PhysicalKey::Unidentified {
+                    code: match native {
+                        keys::NativeKeyCode::Unidentified => NativeKeyCode::Unidentified,
+                        keys::NativeKeyCode::Android(code) => NativeKeyCode::Android { code: i64::from(code) },
+                        keys::NativeKeyCode::MacOS(code) => NativeKeyCode::MacOS { code: i32::from(code) },
+                        keys::NativeKeyCode::Windows(code) => NativeKeyCode::Windows { code: i32::from(code) },
+                        keys::NativeKeyCode::Xkb(code) => NativeKeyCode::Xkb { code: i64::from(code) },
+                    },
+                },
             }
         };
     }
     xwindow_core::key_codes!(codes)
 }
 
-/// A logical key as the declaration's `Key`, and its text.
-fn logical_key(key: &keys::Key) -> (Key, String) {
+fn logical_key(key: &keys::Key) -> Key {
     macro_rules! named {
         ($($name:ident),* $(,)?) => {
             match key {
-                $(keys::Key::Named(keys::NamedKey::$name) => (Key::$name, String::new()),)*
-                keys::Key::Named(_) => (Key::Unidentified, String::new()),
-                keys::Key::Character(text) => (Key::Character, text.to_string()),
-                keys::Key::Dead(character) => (Key::Dead, character.map(String::from).unwrap_or_default()),
-                keys::Key::Unidentified(keys::NativeKey::Web(text)) => (Key::Unidentified, text.to_string()),
-                keys::Key::Unidentified(_) => (Key::Unidentified, String::new()),
+                $(keys::Key::Named(keys::NamedKey::$name) => Key::Named { key: NamedKey::$name },)*
+                keys::Key::Named(_) => Key::Named { key: NamedKey::Unrecognized },
+                keys::Key::Character(text) => Key::Character { text: text.to_string() },
+                keys::Key::Dead(character) => Key::Dead {
+                    character: character.map_or(OptionalText::None, |c| OptionalText::Some {
+                        text: c.to_string(),
+                    }),
+                },
+                keys::Key::Unidentified(native) => Key::Unidentified {
+                    key: match native {
+                        keys::NativeKey::Unidentified => NativeKey::Unidentified,
+                        keys::NativeKey::Android(code) => NativeKey::Android { code: i64::from(*code) },
+                        keys::NativeKey::MacOS(code) => NativeKey::MacOS { code: i32::from(*code) },
+                        keys::NativeKey::Windows(code) => NativeKey::Windows { code: i32::from(*code) },
+                        keys::NativeKey::Xkb(code) => NativeKey::Xkb { code: i64::from(*code) },
+                        keys::NativeKey::Web(key) => NativeKey::Web { key: key.to_string() },
+                    },
+                },
             }
         };
     }

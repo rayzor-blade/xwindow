@@ -38,9 +38,9 @@ pub fn browser_idl() -> String {
     format!("{WINDOW_IDL}\n{AGENT_IDL}")
 }
 
-/// The complete declaration: `WINDOW_API` with `KeyCode`, `Key` and
+/// The complete declaration: `WINDOW_API` with `KeyCode`, `NamedKey` and
 /// `CursorIcon` from xwindow-core's lists, which the backends convert by
-/// the same names.
+/// the same names. `Unrecognized` is a key a newer winit names.
 pub fn window_api() -> String {
     let codes = xwindow_core::KEY_CODES.join(", ");
     let named = xwindow_core::NAMED_KEYS.join(", ");
@@ -48,10 +48,9 @@ pub fn window_api() -> String {
     format!(
         "{WINDOW_API}\n\
          /// A physical key, by its `KeyboardEvent.code` name.\n\
-         enum KeyCode {{ Unidentified, {codes} }}\n\
-         /// A logical key: a named one, or `Character`, `Dead` or\n\
-         /// `Unidentified` with its text beside it.\n\
-         enum Key {{ Unidentified, Character, Dead, {named} }}\n\
+         enum KeyCode {{ Unrecognized, {codes} }}\n\
+         /// A named logical key, by its `KeyboardEvent.key` name.\n\
+         enum NamedKey {{ Unrecognized, {named} }}\n\
          enum CursorIcon {{ {icons} }}\n"
     )
 }

@@ -65,4 +65,58 @@ mod tests {
         );
         assert!(symbols.iter().all(|(name, _)| name.starts_with("xwindow_")));
     }
+
+    #[test]
+    fn getters_read_the_kept_event_down_through_its_nested_values() {
+        use super::*;
+        __XIDL_Window_Event.with(|slot| {
+            *slot.borrow_mut() = Event::KeyboardInput {
+                device_id: 3,
+                event: KeyEvent::Input {
+                    physical_key: PhysicalKey::Code {
+                        code: KeyCode::KeyA,
+                    },
+                    logical_key: Key::Character { text: "a".into() },
+                    text: OptionalText::Some { text: "a".into() },
+                    location: KeyLocation::Left,
+                    state: MouseElementState::Pressed,
+                    repeat: true,
+                    supplement: KeySupplement::Unavailable,
+                },
+                is_synthetic: false,
+            }
+        });
+        assert_eq!(Window::eventKeyboardInputDeviceId(), 3);
+        assert_eq!(Window::eventKeyboardInputEventVariant(), 0);
+        assert_eq!(Window::eventKeyboardInputEventInputPhysicalKeyVariant(), 0);
+        assert_eq!(
+            Window::eventKeyboardInputEventInputPhysicalKeyCodeCode().get(),
+            KeyCode::KeyA
+        );
+        assert_eq!(Window::eventKeyboardInputEventInputLogicalKeyVariant(), 1);
+        assert_eq!(
+            Window::eventKeyboardInputEventInputLogicalKeyCharacterText().as_str(),
+            "a"
+        );
+        assert_eq!(Window::eventKeyboardInputEventInputTextVariant(), 1);
+        assert_eq!(
+            Window::eventKeyboardInputEventInputLocation().get(),
+            KeyLocation::Left
+        );
+        assert!(Window::eventKeyboardInputEventInputRepeat());
+        assert_eq!(Window::eventKeyboardInputEventInputSupplementVariant(), 0);
+        // A field of another shape reads as its default.
+        assert_eq!(Window::eventResizedWidth(), 0);
+
+        __XIDL_Window_Event.with(|slot| {
+            *slot.borrow_mut() = Event::DroppedFile {
+                path: FilePath::UnixBytes {
+                    bytes: VariantBytes(vec![b'/', 255]),
+                },
+            }
+        });
+        assert_eq!(Window::eventDroppedFilePathVariant(), 1);
+        let bytes = Window::eventDroppedFilePathUnixBytesBytes();
+        assert_eq!(unsafe { bytes.as_slice() }, [b'/', 255]);
+    }
 }

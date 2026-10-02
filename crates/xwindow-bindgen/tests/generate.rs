@@ -18,15 +18,19 @@ fn every_runtime_generates_its_model() {
 
     let rayzor = xwindow_bindgen::generate(Runtime::Rayzor).unwrap();
     syn::parse_file(&rayzor).unwrap();
-    assert!(rayzor.contains("export_name = \"xwindow_window_poll_keyboard_input_code\""));
+    // A key's physical code, three variants down.
+    assert!(rayzor.contains(
+        "export_name = \"xwindow_window_event_keyboard_input_event_input_physical_key_code_code\""
+    ));
+    assert!(rayzor.contains("fn eventKeyboardInputEventVariant () -> i32"));
     assert!(rayzor.contains("\"window::Window\""));
 }
 
 #[test]
 fn the_key_and_cursor_enums_come_from_the_core_lists() {
     let api = xwindow_bindgen::window_api();
-    assert!(api.contains("enum KeyCode { Unidentified, Backquote,"));
-    assert!(api.contains("enum Key { Unidentified, Character, Dead,"));
+    assert!(api.contains("enum KeyCode { Unrecognized, Backquote,"));
+    assert!(api.contains("enum NamedKey { Unrecognized, Alt,"));
     assert!(api.contains("ZoomOut, DndAsk, AllResize }"));
     assert_eq!(xwindow_core::KEY_CODES.len(), 194);
     assert_eq!(xwindow_core::NAMED_KEYS.len(), 306);

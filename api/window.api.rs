@@ -1,8 +1,9 @@
 // The `window` API every xwindow adapter exposes: windows, their events and
 // the monitors they are on. Positions and sizes a window reports are in
 // physical pixels; sizes and positions a program asks for are logical, as
-// winit takes them. xwindow-bindgen appends `KeyCode`, `Key` and
-// `CursorIcon` from xwindow-core's lists.
+// winit takes them. Events have the shapes winit gives them.
+// xwindow-bindgen appends `KeyCode`, `NamedKey` and `CursorIcon` from
+// xwindow-core's lists.
 
 enum WindowLevel {
     Normal,
@@ -34,13 +35,26 @@ enum Attention {
     Critical,
 }
 
+/// Whether a key or button is down.
+enum MouseElementState {
+    Pressed,
+    Released,
+}
+
 enum MouseButton {
     Left,
     Right,
     Middle,
     Back,
     Forward,
-    Other,
+    Other { button: i32 },
+}
+
+/// Lines and rows of text, or pixels. Positive `y` scrolls the content
+/// down the window, as winit reports.
+enum MouseScrollDelta {
+    LineDelta { x: f64, y: f64 },
+    PixelDelta { x: f64, y: f64 },
 }
 
 enum TouchPhase {
@@ -50,12 +64,6 @@ enum TouchPhase {
     Cancelled,
 }
 
-/// Lines and pages of text, or pixels.
-enum ScrollUnit {
-    Line,
-    Pixel,
-}
-
 enum KeyLocation {
     Standard,
     Left,
@@ -63,183 +71,219 @@ enum KeyLocation {
     Numpad,
 }
 
-/// What `Window.poll` and `Window.wait` return: the next event, or `None`.
-/// `device` is a positive id per input device, the same for a device's
-/// window and raw events.
-enum Event {
+/// Text, or none, which is not the same as empty.
+enum OptionalText {
     None,
-    /// The window is asked to close. It stays open until `close`.
-    CloseRequested,
-    Destroyed,
-    Resized {
-        width: i32,
-        height: i32,
+    Some { text: Text },
+}
+
+enum OptionalFloat {
+    None,
+    Some { value: f64 },
+}
+
+/// UTF-8 byte offsets of an IME's cursor in its text.
+enum CursorRange {
+    None,
+    Range { start: i64, end: i64 },
+}
+
+enum Ime {
+    Enabled,
+    Preedit { text: Text, cursor: CursorRange },
+    Commit { text: Text },
+    Disabled,
+}
+
+/// A path as Unicode when it is; otherwise its exact bytes: a Unix path's,
+/// or a Windows path's UTF-16 code units, little-endian. In a page, a
+/// dropped file's name.
+enum FilePath {
+    Utf8 { path: Text },
+    UnixBytes { bytes: Buffer },
+    WindowsWide { utf16le: Buffer },
+}
+
+enum TouchForce {
+    None,
+    Calibrated {
+        force: f64,
+        max_possible_force: f64,
+        altitude_angle: OptionalFloat,
     },
-    Moved {
-        x: i32,
-        y: i32,
+    Normalized { force: f64 },
+}
+
+/// A platform's code for a physical key winit does not name.
+enum NativeKeyCode {
+    Unidentified,
+    Android { code: i64 },
+    MacOS { code: i32 },
+    Windows { code: i32 },
+    Xkb { code: i64 },
+}
+
+/// A platform's code or name for a logical key winit does not name.
+enum NativeKey {
+    Unidentified,
+    Android { code: i64 },
+    MacOS { code: i32 },
+    Windows { code: i32 },
+    Xkb { code: i64 },
+    Web { key: Text },
+}
+
+enum PhysicalKey {
+    Code { code: Enum<KeyCode> },
+    Unidentified { code: NativeKeyCode },
+}
+
+enum Key {
+    Named { key: Enum<NamedKey> },
+    Character { text: Text },
+    Unidentified { key: NativeKey },
+    Dead { character: OptionalText },
+}
+
+/// What the key would be without modifiers, and the text it types with all
+/// of them, where the platform says.
+enum KeySupplement {
+    Unavailable,
+    Supplement {
+        key_without_modifiers: Key,
+        text_with_all_modifiers: OptionalText,
     },
-    Focused {
-        focused: bool,
-    },
-    Occluded {
-        occluded: bool,
-    },
-    ScaleFactorChanged {
-        scaleFactor: f64,
-    },
-    ThemeChanged {
-        theme: Enum<Theme>,
-    },
-    RedrawRequested,
-    CursorEntered {
-        device: i32,
-    },
-    CursorLeft {
-        device: i32,
-    },
-    CursorMoved {
-        device: i32,
-        x: f64,
-        y: f64,
-    },
-    /// `code` is the platform's number for an `Other` button.
-    MouseInput {
-        device: i32,
-        button: Enum<MouseButton>,
-        code: i32,
-        pressed: bool,
-    },
-    /// Positive `y` scrolls the content down the window, as winit reports.
-    MouseWheel {
-        device: i32,
-        unit: Enum<ScrollUnit>,
-        x: f64,
-        y: f64,
-        phase: Enum<TouchPhase>,
-    },
-    /// `code` is the physical key, with the platform's `scancode` when
-    /// it is `Unidentified`. `key` is the logical key; for `Character` and
-    /// `Dead` its text is `character`. `text` is what the press types.
-    KeyboardInput {
-        device: i32,
-        code: Enum<KeyCode>,
-        scancode: i32,
-        key: Enum<Key>,
-        character: Text,
-        text: Text,
+}
+
+enum KeyEvent {
+    Input {
+        physical_key: PhysicalKey,
+        logical_key: Key,
+        text: OptionalText,
         location: Enum<KeyLocation>,
-        pressed: bool,
+        state: Enum<MouseElementState>,
         repeat: bool,
-        synthetic: bool,
+        supplement: KeySupplement,
     },
-    ModifiersChanged {
+}
+
+enum ModifiersKeyState {
+    Unknown,
+    Pressed,
+}
+
+/// The modifiers in effect, and which side of each is held.
+enum Modifiers {
+    State {
         shift: bool,
         control: bool,
         alt: bool,
-        superKey: bool,
+        super_key: bool,
+        left_shift: Enum<ModifiersKeyState>,
+        right_shift: Enum<ModifiersKeyState>,
+        left_control: Enum<ModifiersKeyState>,
+        right_control: Enum<ModifiersKeyState>,
+        left_alt: Enum<ModifiersKeyState>,
+        right_alt: Enum<ModifiersKeyState>,
+        left_super: Enum<ModifiersKeyState>,
+        right_super: Enum<ModifiersKeyState>,
     },
-    ImeEnabled,
-    /// `start` and `end` are UTF-8 byte offsets of the cursor in `text`,
-    /// or -1 with no cursor.
-    ImePreedit {
-        text: Text,
-        start: i32,
-        end: i32,
+}
+
+/// A device's raw input, whichever window has focus.
+enum DeviceEvent {
+    Added,
+    Removed,
+    MouseMotion { x: f64, y: f64 },
+    MouseWheel { delta: MouseScrollDelta },
+    Motion { axis: i64, value: f64 },
+    Button { button: i64, state: Enum<MouseElementState> },
+    Key {
+        physical_key: PhysicalKey,
+        state: Enum<MouseElementState>,
     },
-    ImeCommit {
-        text: Text,
+}
+
+/// What `Window.poll` and `Window.wait` return: the next event, or `None`.
+/// `device_id` is a positive id per input device. Raw device events go to
+/// the focused window, or the first one open when none has focus.
+enum Event {
+    None,
+    /// The window is asked to close. It stays open until `close`.
+    Closed,
+    Destroyed,
+    Resized { width: i64, height: i64 },
+    Moved { x: i32, y: i32 },
+    Focused { focused: bool },
+    Occluded { occluded: bool },
+    ScaleFactorChanged { scale_factor: f64 },
+    ThemeChanged { theme: Enum<Theme> },
+    RedrawRequested,
+    CursorEntered { device_id: i32 },
+    CursorLeft { device_id: i32 },
+    CursorMoved { x: f64, y: f64, device_id: i32 },
+    MouseInput {
+        state: Enum<MouseElementState>,
+        button: MouseButton,
+        device_id: i32,
     },
-    ImeDisabled,
-    /// A path as Unicode; in a page, the file's name.
-    HoveredFile {
-        path: Text,
-    },
-    DroppedFile {
-        path: Text,
-    },
-    HoveredFileCancelled,
-    /// `force` is normalized to 0..1, or -1 when the device reports none.
-    Touch {
-        device: i32,
-        id: i64,
+    MouseWheel {
+        delta: MouseScrollDelta,
         phase: Enum<TouchPhase>,
-        x: f64,
-        y: f64,
-        force: f64,
+        device_id: i32,
     },
+    KeyboardInput {
+        device_id: i32,
+        event: KeyEvent,
+        is_synthetic: bool,
+    },
+    ModifiersChanged { modifiers: Modifiers },
+    Ime { event: Ime },
+    DroppedFile { path: FilePath },
+    HoveredFile { path: FilePath },
+    HoveredFileCancelled,
     PinchGesture {
-        device: i32,
+        device_id: i32,
         delta: f64,
         phase: Enum<TouchPhase>,
     },
     PanGesture {
-        device: i32,
+        device_id: i32,
         x: f64,
         y: f64,
         phase: Enum<TouchPhase>,
     },
+    DoubleTapGesture { device_id: i32 },
     RotationGesture {
-        device: i32,
+        device_id: i32,
         delta: f64,
         phase: Enum<TouchPhase>,
     },
-    DoubleTapGesture {
-        device: i32,
-    },
     TouchpadPressure {
-        device: i32,
+        device_id: i32,
         pressure: f64,
         stage: i64,
     },
     AxisMotion {
-        device: i32,
-        axis: i32,
+        device_id: i32,
+        axis: i64,
         value: f64,
     },
-    /// The token for the request `requestActivationToken` numbered `serial`.
-    ActivationTokenDone {
-        serial: i64,
-        token: Text,
+    /// All 64 bits of the touch's id.
+    Touch {
+        device_id: i32,
+        phase: Enum<TouchPhase>,
+        x: f64,
+        y: f64,
+        force: TouchForce,
+        id: i64,
     },
+    /// The token for the request `requestActivationToken` numbered `serial`.
+    ActivationTokenDone { serial: i64, token: Text },
+    Device { device_id: i32, event: DeviceEvent },
     Resumed,
     Suspended,
     MemoryWarning,
-    // Raw device events, which go to the focused window, or the first one
-    // open when none has focus.
-    DeviceAdded {
-        device: i32,
-    },
-    DeviceRemoved {
-        device: i32,
-    },
-    MouseMotion {
-        device: i32,
-        x: f64,
-        y: f64,
-    },
-    DeviceWheel {
-        device: i32,
-        unit: Enum<ScrollUnit>,
-        x: f64,
-        y: f64,
-    },
-    DeviceAxis {
-        device: i32,
-        axis: i32,
-        value: f64,
-    },
-    DeviceButton {
-        device: i32,
-        button: i32,
-        pressed: bool,
-    },
-    DeviceKey {
-        device: i32,
-        code: Enum<KeyCode>,
-        scancode: i32,
-        pressed: bool,
-    },
 }
 
 /// What a window opens with; whatever is left unset is the platform's

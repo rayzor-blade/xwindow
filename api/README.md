@@ -1,8 +1,8 @@
 # xwindow API and browser specification input
 
 [`window.api.rs`](window.api.rs) declares the `window` API every runtime
-adapter exposes. xwindow-bindgen appends `KeyCode`, `Key` and `CursorIcon`
-to it from xwindow-core's lists.
+adapter exposes. xwindow-bindgen appends `KeyCode`, `NamedKey` and
+`CursorIcon` to it from xwindow-core's lists.
 
 ## `spec/window.idl`
 

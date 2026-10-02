@@ -34,19 +34,26 @@ x-idl reads Rust-shaped declarations:
 - A fieldless enum is a set of integer codes.
 - An enum whose variants have named fields is a set of variants, such as
   `Event`:
-  - Its first variant has no fields. It is what a failed call returns.
-  - Its fields are numbers, `bool`, `Text` or `Enum<T>`.
+  - Its fields are numbers, `bool`, `Text`, `Buffer`, `Enum<T>`, or other
+    variants, which nest.
+  - Its first variant, with its fields at their defaults, is what a failed
+    call returns.
 
 How each runtime takes variants:
 
-- **Caribou** takes them whole, as a `PluginEnum`.
-- **HashLink and Rayzor** take the variant's index. Each field is a getter
-  over what the call kept. The generated Haxe builds the enum from these.
+- **Caribou** takes them whole, as nested `PluginEnum`s.
+- **HashLink and Rayzor** take the variant's index. Each class keeps the
+  last value of each variants type it returns. Every field, at any depth,
+  has a getter over that value. A generated `read<Type>(index)` in the
+  Haxe surface builds the enum from these getters.
 
-`xwindow_bindgen::window_api()` appends `KeyCode`, `Key` and `CursorIcon`
-from xwindow-core's lists. Their variants share winit's names, so the
-backends convert by name, and a winit upgrade that renames a key fails to
-compile. Update the lists in `xwindow-core` when upgrading winit.
+A `Buffer` field is held as the generated `VariantBytes(Vec<u8>)`.
+
+`xwindow_bindgen::window_api()` appends `KeyCode`, `NamedKey` and
+`CursorIcon` from xwindow-core's lists. Their variants share winit's names,
+so the backends convert by name, and a winit upgrade that renames a key
+fails to compile. `Unrecognized` stands for a key a newer winit names.
+Update the lists in `xwindow-core` when upgrading winit.
 
 ## Adapter boundary
 
@@ -74,7 +81,7 @@ with `install_scoped`):
 
 `crate::runtime` must provide:
 
-- `Text`, `Buffer` and `ErrorKind`;
+- `Text`, `Buffer` (with `new`, `NULL`, `len` and `as_ptr`) and `ErrorKind`;
 - `host::raise`, and in a browser `host::agent`.
 
 The adapter depends on `xwindow-core`. Natively it also depends on `winit`
@@ -86,9 +93,12 @@ Per runtime:
 - **Caribou** uses `caribou_abi`'s carriers. The plugin is named `window`.
 - **HashLink/Ash** uses an hl_abi runtime module, like hlwgpu's. Its
   primitives load from `xwindow.hdll`, and records are
-  `hl.Abstract<"xwindow_*">`. If the API ever returns `Buffer`, the adapter
-  defines `buffer_result_len` and `buffer_result_copy`, signed
-  `PXxwindow_buffer_result__i` and `PXxwindow_buffer_result_OBi__v`.
+  `hl.Abstract<"xwindow_*">`.
+  - A `Buffer` argument arrives as the generated `HlBytes`, which has
+    `haxe.io.Bytes`' layout: its length, then its data. So
+    `Buffer::from_hl` takes `*mut HlBytes`.
+  - The generated primitives copy `Buffer` results out. They need the
+    carrier's `len` and `as_ptr`.
 - **Rayzor** uses Rayzor's carriers, like rayzor-gpu's. It exports
   `export_abi_version!()` and
   `rpkg_entry!(XIDL_METHODS, xidl_runtime_symbols)`. Every symbol is
