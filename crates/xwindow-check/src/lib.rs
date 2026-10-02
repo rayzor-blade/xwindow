@@ -1,7 +1,8 @@
 //! A stand-in adapter: xwindow's generated Rayzor-shaped model and its
 //! native or web backend, over carriers that only have the shapes a
 //! runtime's do. It checks the generated code and the templates compile
-//! together without any runtime's crates; nothing here is for use.
+//! together without any runtime's crates; nothing here is for use beyond
+//! the desktop test, which drives `backend` directly.
 
 #![allow(dead_code, non_snake_case, clippy::all)]
 #![cfg_attr(
@@ -9,10 +10,10 @@
     feature(stdarch_wasm_atomic_wait)
 )]
 
-mod runtime;
+pub mod runtime;
 
 #[cfg(not(target_os = "wasi"))]
-mod backend {
+pub mod backend {
     include!(concat!(env!("OUT_DIR"), "/xwindow_backend/native.rs"));
 }
 /// The host's hook, as an adapter re-exports it, with the winit its event

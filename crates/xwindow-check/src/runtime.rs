@@ -1,5 +1,6 @@
 //! Carriers with the shapes Rayzor's have: pointer-sized text, bytes and
-//! futures, and integer enums. They leak and raise by printing.
+//! futures, and integer enums. They leak, and raise by printing and keeping
+//! the message for `host::raised`.
 
 use std::marker::PhantomData;
 
@@ -11,9 +12,20 @@ pub enum ErrorKind {
 
 pub mod host {
     use super::ErrorKind;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static RAISED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
 
     pub fn raise(kind: ErrorKind, message: &str) {
         eprintln!("{kind:?}: {message}");
+        RAISED.with(|r| r.borrow_mut().push(format!("{kind:?}: {message}")));
+    }
+
+    /// What this thread raised since the last call.
+    pub fn raised() -> Vec<String> {
+        RAISED.with(|r| std::mem::take(&mut *r.borrow_mut()))
     }
 
     pub fn agent(_: &str, _: usize) -> bool {

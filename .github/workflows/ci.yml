@@ -34,3 +34,59 @@ jobs:
           cargo run -p xwindow-bindgen --bin xwindow-haxe -- rayzor generated/rayzor
           haxe -cp generated/ash -cp examples/events -main Main -hl events.hl
           haxe -cp generated/rayzor -cp examples/events -main Main --interp --no-output
+
+  # Real windows driven by synthetic input; see crates/xwindow-check/tests/desktop.rs.
+  desktop-x11:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: X server, window manager and input tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev \
+            libxcursor1 libxrandr2 libxi6 xvfb x11-utils openbox xdotool
+      - run: cargo build -p xwindow-check --tests
+      - name: Desktop test under Xvfb and openbox
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+          export DISPLAY=:99
+          for i in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
+          openbox &
+          sleep 1
+          XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop
+
+  desktop-wayland:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compositor
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev sway
+      - run: cargo build -p xwindow-check --tests
+      - name: Desktop test under headless sway
+        run: |
+          export XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg
+          mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
+          printf 'output HEADLESS-1 resolution 1280x720\n' > "$RUNNER_TEMP/sway.conf"
+          WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman \
+            sway -c "$RUNNER_TEMP/sway.conf" > "$RUNNER_TEMP/sway.log" 2>&1 &
+          for i in $(seq 100); do ls "$XDG_RUNTIME_DIR"/sway-ipc.* >/dev/null 2>&1 && break; sleep 0.1; done
+          sleep 0.5
+          export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.* | head -1)
+          export WAYLAND_DISPLAY=$(basename "$(ls "$XDG_RUNTIME_DIR"/wayland-* | grep -v lock | head -1)")
+          unset DISPLAY
+          XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop || { cat "$RUNNER_TEMP/sway.log"; exit 1; }
+
+  desktop-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build -p xwindow-check --tests
+      - name: Desktop test with SendInput
+        run: cargo test -p xwindow-check --test desktop
+        env:
+          XWINDOW_DESKTOP: "1"

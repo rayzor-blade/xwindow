@@ -21,3 +21,24 @@ raw-window-handle = "0.6"
 # winit on Android needs an activity: the one the host's Java side starts.
 [target.'cfg(target_os = "android")'.dependencies]
 winit = { version = "0.30", features = ["android-native-activity"] }
+
+# Opens real windows; does nothing unless XWINDOW_DESKTOP=1.
+[[test]]
+name = "desktop"
+harness = false
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# Wayland maps a window only once it has a frame, which the test draws, and
+# takes input from virtual devices the test holds.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+softbuffer = { version = "0.4", default-features = false, features = ["wayland", "wayland-dlopen"] }
+wayland-client = "0.31"
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
