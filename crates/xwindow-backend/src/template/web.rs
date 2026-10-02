@@ -218,11 +218,19 @@ impl Page {
             },
             // A browser's delta points the way the page scrolls; winit's, the
             // way the content moves.
+            // A page scrolls down for a positive delta; winit, up. `0.0 - x`
+            // rather than `-x`, so an axis that did not move reads 0, not -0.
             K::MouseWheel => Event::MouseWheel {
                 delta: if e.unit.unwrap_or(0) == 0 {
-                    MouseScrollDelta::PixelDelta { x: -x, y: -y }
+                    MouseScrollDelta::PixelDelta {
+                        x: 0.0 - x,
+                        y: 0.0 - y,
+                    }
                 } else {
-                    MouseScrollDelta::LineDelta { x: -x, y: -y }
+                    MouseScrollDelta::LineDelta {
+                        x: 0.0 - x,
+                        y: 0.0 - y,
+                    }
                 },
                 phase: TouchPhase::Moved,
                 device_id,

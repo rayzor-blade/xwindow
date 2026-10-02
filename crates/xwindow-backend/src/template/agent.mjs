@@ -75,6 +75,10 @@ export function start({ memory, address, canvas }) {
     size = [width, height];
     post({ kind: "resized", width, height, scale: ratio() });
   };
+  const measure = () => {
+    const rect = canvas.getBoundingClientRect();
+    resized(rect.width * ratio(), rect.height * ratio());
+  };
   new ResizeObserver((entries) => {
     for (const entry of entries) {
       const box = entry.devicePixelContentBoxSize?.[0];
@@ -183,8 +187,9 @@ export function start({ memory, address, canvas }) {
     post({ kind: "mouse-wheel", unit: e.deltaMode, x: e.deltaX * scale, y: e.deltaY * scale });
   }, { passive: false });
 
-  // Keys, and the modifiers they change, with the side each is held on.
-  let lastModifiers = -1;
+  // Keys, and the modifiers they change, with the side each is held on. None
+  // are held to begin with.
+  let lastModifiers = 0;
   let sides = 0;
   const SIDE = { Shift: 1, Control: 4, Alt: 16, Meta: 64 };
   const key = (pressed) => (e) => {
@@ -333,9 +338,12 @@ export function start({ memory, address, canvas }) {
     for (const file of e.dataTransfer?.files || []) post({ kind: "dropped-file", text: file.name });
   });
 
+  // A command that sizes the canvas posts the size it lays out to, so the
+  // program has it once its commands have run, not a frame later.
   const cssSize = (w, h, first, second) => {
     canvas.style[first] = w > 0 ? `${w}px` : "";
     canvas.style[second] = h > 0 ? `${h}px` : "";
+    if (!canvas.hidden) measure();
   };
 
   // XwAgent, which the program's commands call.
@@ -382,8 +390,7 @@ export function start({ memory, address, canvas }) {
   // The window as it is.
   screenChanged();
   watchScale();
-  const rect = canvas.getBoundingClientRect();
-  resized(rect.width * ratio(), rect.height * ratio());
+  measure();
   focused(document.activeElement === canvas);
   post({ kind: "theme-changed", on: dark.matches });
 

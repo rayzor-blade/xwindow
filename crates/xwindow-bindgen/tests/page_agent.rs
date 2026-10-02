@@ -23,7 +23,7 @@ fn main() {
         let mut e = Encoder::new();
         e.document_set_title(Handle(2), &"Hello".to_owned());
         e.css_style_declaration_set_property(Handle(4), &"cursor".to_owned(), &"pointer".to_owned(), &None);
-        e.xw_agent_set_size(Handle(5), &320.0, &200.0);
+        e.xw_agent_set_size(Handle(5), &400.0, &250.0);
         e.xw_agent_set_visible(Handle(5), &false);
         std::fs::write("batch.bin", &e.bytes).unwrap();
         return;
@@ -70,7 +70,10 @@ class Element extends EventTarget {
     this.tabIndex = -1;
     this.hidden = true;
   }
-  getBoundingClientRect() { return { left: 0, top: 0, width: 320, height: 200 }; }
+  // Laid out at its CSS size, or 320 by 200.
+  getBoundingClientRect() {
+    return { left: 0, top: 0, width: parseFloat(this.style.width) || 320, height: parseFloat(this.style.height) || 200 };
+  }
   focus() { document.activeElement = this; }
   contains(other) { return other === this; }
 }
@@ -104,6 +107,7 @@ start({ memory, address: 0, canvas });
 
 fire("pointermove", { pointerId: 1, pointerType: "mouse", offsetX: 10, offsetY: 20, movementX: 0, movementY: 0, pressure: 0 });
 fire("pointerdown", { pointerId: 1, pointerType: "mouse", button: 2, offsetX: 10, offsetY: 20, pressure: 0.5 });
+fire("keydown", { code: "KeyB", key: "b", location: 0, repeat: false });
 fire("keydown", { code: "KeyA", key: "a", location: 0, repeat: false, shiftKey: true });
 Atomics.store(words, 44 >> 2, 1); // a redraw, asked for
 await new Promise((resolve) => setTimeout(resolve, 20));
@@ -154,10 +158,11 @@ fn commands_reach_the_page_and_its_events_come_back() {
 
     assert_eq!(
         page.trim(),
-        r#"{"title":"Hello","cursor":"pointer","width":"320px","height":"200px","hidden":true,"tabIndex":0}"#
+        r#"{"title":"Hello","cursor":"pointer","width":"400px","height":"250px","hidden":true,"tabIndex":0}"#
     );
     // The window as it is when the agent starts, then what the page fired,
-    // in physical pixels at a scale of 2.
+    // in physical pixels at a scale of 2, then the size the batch set. A key
+    // with no modifiers held changes none.
     assert_eq!(
         events.trim(),
         [
@@ -167,9 +172,11 @@ fn commands_reach_the_page_and_its_events_come_back() {
             "ThemeChanged on=false",
             "CursorMoved device=1 x=20 y=40",
             "MouseInput device=1 on=true button=2",
+            "KeyboardInput on=true code=KeyB key=b",
             "KeyboardInput on=true code=KeyA key=a",
             "ModifiersChanged modifiers=1",
             "RedrawRequested",
+            "Resized width=800 height=500 scale=2",
         ]
         .join("\n")
     );
