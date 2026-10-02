@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1790977291,"nonce":"eKtQOWrD59LWFyejekKiFfIbM1w=","added":["bug","area:backend"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790984295,"nonce":"cVr6yzkzocbD3LOwRQEJ598mgSs=","message":"Fixed in 0f48183a3330345b039c584672ed344659870d9d. The desktop test's title check passes under X11.","files":null}]}
