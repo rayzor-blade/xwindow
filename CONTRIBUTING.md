@@ -91,11 +91,12 @@ working shape.
 Per runtime:
 
 - **Caribou** uses `caribou_abi`'s carriers. The plugin is named `window`.
-- **HashLink/Ash** uses an hl_abi runtime module, like hlwgpu's. Its
-  primitives load from `xwindow.hdll`, and records are
-  `hl.Abstract<"xwindow_*">`.
-  - A `Buffer` argument arrives as the generated `HlBytes`, which has
-    `haxe.io.Bytes`' layout: its length, then its data. So
+- **HashLink/Ash** uses an hl_abi runtime module: hlwgpu's `hl_xidl`,
+  which hlwgpu's `hlwindow` adapter uses. Its primitives load from
+  `xwindow.hdll`, or from the side module `xwindow.wasm` in a wasm
+  build, and records are `hl.Abstract<"xwindow_*">`.
+  - A `Buffer` argument arrives as a `haxe.io.Bytes`: its length, then
+    its data. The runtime module defines that layout as `HlBytes`, and
     `Buffer::from_hl` takes `*mut HlBytes`.
   - The generated primitives copy `Buffer` results out. They need the
     carrier's `len` and `as_ptr`.
@@ -108,7 +109,8 @@ The native backend shares one winit event loop among all windows, on the
 thread that opened the first. Pumping it sorts each window's events into
 that window's queue. Raw device events go to the focused window. The loop
 pumps through winit's `pump_events`, so it runs where that API does:
-Windows, macOS, X11, Wayland and Android.
+Windows, macOS, X11 and Wayland. Android has `pump_events` too, but its
+loop needs the host's `AndroidApp`, which the backend is not yet given.
 
 ## Browser boundary
 
