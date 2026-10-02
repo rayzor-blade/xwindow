@@ -92,7 +92,8 @@ Per runtime:
 
 - **Caribou** uses `caribou_abi`'s carriers. The plugin is named `window`.
 - **HashLink/Ash** uses an hl_abi runtime module: hlwgpu's `hl_xidl`,
-  which hlwgpu's `hlwindow` adapter uses. Its primitives load from
+  which the [hlwindow](https://github.com/rayzor-blade/hlwindow) adapter
+  uses. Its primitives load from
   `xwindow.hdll`, or from the side module `xwindow.wasm` in a wasm
   build, and records are `hl.Abstract<"xwindow_*">`.
   - A `Buffer` argument arrives as a `haxe.io.Bytes`: its length, then

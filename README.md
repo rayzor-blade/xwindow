@@ -91,7 +91,7 @@ the W3C names a browser reports too.
 | Runtime | Native | Browser | Adapter |
 |---|---|---|---|
 | Caribou | winit | The page agent, started through `host::agent` | `caribou/plugins/cb_window` moves onto xwindow, as `cb_gpu` did onto xgpu |
-| Ash / HashLink | winit, loaded as `xwindow.hdll` | The page agent, started through `ash_host_agent` | `hlwgpu/crates/hlwindow`, built as `xwindow.hdll` and `xwindow.wasm` |
+| Ash / HashLink | winit, loaded as `xwindow.hdll` | The page agent, started through `ash_host_agent` | [hlwindow](https://github.com/rayzor-blade/hlwindow), built as `xwindow.hdll` and `xwindow.wasm` |
 | Rayzor | winit, in an `.rpkg` | Needs a Rayzor agent hook | A window package beside `rayzor-gpu.rpkg` |
 
 Adapters stay in their host repositories, as xgpu's do.
