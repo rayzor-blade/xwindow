@@ -438,6 +438,9 @@ trait Window {
     fn setContentProtected(this: &Window, protected: bool);
     #[native(window_set_scale_sizing)]
     fn setScaleSizing(this: &Window, sizing: Enum<ScaleSizing>);
+    /// A theme, or none to follow the system's.
+    #[native(window_set_theme)]
+    fn setTheme(this: &Window, theme: Option<Enum<Theme>>);
     /// RGBA pixels, `width` by `height`; an empty buffer removes the icon.
     #[native(window_set_icon)]
     fn setIcon(this: &Window, rgba: Buffer, width: i32, height: i32);

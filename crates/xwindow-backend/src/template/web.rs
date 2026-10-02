@@ -719,6 +719,8 @@ pub unsafe fn window_set_scale_sizing(handle: i32, sizing: i32) {
     });
 }
 
+pub unsafe fn window_set_theme(_: i32, _: Option<i32>) {}
+
 pub unsafe fn window_set_icon(_: i32, _: Buffer, _: i32, _: i32) {}
 
 pub unsafe fn window_set_resize_increments(_: i32, _: i32, _: i32) {}

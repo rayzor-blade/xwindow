@@ -1321,6 +1321,11 @@ pub unsafe fn window_set_scale_sizing(handle: i32, sizing: i32) {
     });
 }
 
+pub unsafe fn window_set_theme(handle: i32, theme: Option<i32>) {
+    let theme = theme.and_then(Theme::from_native).map(native_theme);
+    window(handle, (), |w| w.set_theme(theme));
+}
+
 #[allow(unused_unsafe)]
 pub unsafe fn window_set_icon(handle: i32, rgba: Buffer, width: i32, height: i32) {
     match icon(unsafe { rgba.as_slice() }, width, height) {
