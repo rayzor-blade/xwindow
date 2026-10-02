@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":4,"timestamp":1790984295,"nonce":"KwuuliTsQ7/isy6CKNj9rn4MFAY=","status":2}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790984685,"nonce":"D4pPg/cPc13u1530Q6ZIp+G6Yvo=","message":"hlwindow adopted the hook in b1b12b8e5168ba32e5a24414dea69d799045db43: it re-exports attach, Drive and winit, and enables android-native-activity by default (android-game-activity by choice).","files":null}]}
