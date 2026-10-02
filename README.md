@@ -1,8 +1,9 @@
 # xwindow
 
 xwindow gives Caribou, Ash and Rayzor one `window` API: windows, their
-events, monitors, cursors and text input. On a desktop it is backed by winit.
-In a page the window is the page's canvas, driven by a browser agent that
+events, monitors, cursors and text input. Natively it is backed by winit: on
+a desktop, and on Android and iOS through a hook the host calls (see
+CONTRIBUTING.md). In a page the window is the page's canvas, driven by a browser agent that
 xwindow generates and ships.
 
 ## When to use it

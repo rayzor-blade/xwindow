@@ -107,11 +107,47 @@ Per runtime:
   `xwindow_*`, and every class `window::*`, matching the externs.
 
 The native backend shares one winit event loop among all windows, on the
-thread that opened the first. Pumping it sorts each window's events into
-that window's queue. Raw device events go to the focused window. The loop
-pumps through winit's `pump_events`, so it runs where that API does:
-Windows, macOS, X11 and Wayland. Android has `pump_events` too, but its
-loop needs the host's `AndroidApp`, which the backend is not yet given.
+thread that opened the first. Each window's events are sorted into that
+window's queue. Raw device events go to the focused window.
+
+### The host's hook
+
+By default the program pumps the loop inside `open`, `poll` and `wait`,
+through winit's `pump_events`. That works on Windows, macOS, X11 and
+Wayland. A host that has to build the loop, or run it, hands it to the
+backend instead, before the first window opens:
+
+```rust
+attach(events, Drive::Pump)?;           // the program pumps the host's loop
+attach(events, Drive::Turns(&mut turn))?; // the host runs it; returns when it ends
+```
+
+- **Android:** the host builds the loop with the `AndroidApp` its
+  `android_main` receives, using `EventLoop::builder().with_android_app(app)`.
+  Either drive works. `open` waits for the activity to resume.
+- **iOS:** winit cannot pump, so only `Drive::Turns` works. The host
+  calls `attach` from `main`, and it never returns.
+
+Under `Drive::Turns`, `turn` is the program's turn. The loop calls it each
+time events have come, until it returns false. In a turn:
+
+- a window can open, and only in a turn;
+- `poll` and `wait` return what has come without blocking;
+- the last of them to find nothing says when the next turn is: at once
+  after `poll`, within the timeout after `wait`, and when events come after
+  a negative `wait`.
+
+An adapter that runs natively must:
+
+- re-export `backend::{attach, Drive}`, and `winit` so a host builds the
+  loop from the same crate;
+- on Android, enable one of winit's activity features, which cannot both
+  be on. Its own `android-native-activity` feature is on by default and
+  forwards to winit's. A host on a GameActivity turns default features off
+  and enables `android-game-activity`.
+
+`cargo run -p xwindow-check --example host -- pump|turns` runs a program
+both ways on a desktop and checks what it saw.
 
 ## Browser boundary
 

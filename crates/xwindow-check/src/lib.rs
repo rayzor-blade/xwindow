@@ -15,6 +15,12 @@ mod runtime;
 mod backend {
     include!(concat!(env!("OUT_DIR"), "/xwindow_backend/native.rs"));
 }
+/// The host's hook, as an adapter re-exports it, with the winit its event
+/// loop is built from.
+#[cfg(not(target_os = "wasi"))]
+pub use backend::{Drive, attach};
+#[cfg(not(target_os = "wasi"))]
+pub use winit;
 #[cfg(target_os = "wasi")]
 mod web {
     include!(concat!(env!("OUT_DIR"), "/xwindow_backend/web.rs"));

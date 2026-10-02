@@ -1,25 +1,34 @@
-//! Windows on a desktop: winit, pumped by `poll` and `wait`.
+//! Windows natively: winit.
 //!
 //! Every window shares one event loop on the thread that opened the first;
 //! winit allows one per program, and some platforms require it to be the
-//! main thread. Pumping it sorts each window's events into that window's
-//! queue, so polling one window never loses another's events. Raw device
-//! events go to the focused window, or the first open one.
+//! main thread. Its events are sorted into each window's queue, so polling
+//! one window never loses another's events. Raw device events go to the
+//! focused window, or the first open one.
+//!
+//! The loop is driven one of two ways, which the host picks with `attach`:
+//!
+//! - The program pumps it inside `open`, `poll` and `wait`. This is the
+//!   default, on every platform winit pumps on.
+//! - The host runs it and gives the program turns. iOS has no pumping, so
+//!   it is the only way there.
 //!
 //! Uses its adapter's generated model at the crate root and its carriers
 //! from `crate::runtime`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
+use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{self as native, DeviceId, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, EventLoop};
+use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, ControlFlow, EventLoop};
 use winit::keyboard as keys;
 use winit::monitor::MonitorHandle;
+#[cfg(not(target_os = "ios"))]
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{self as windows, WindowId};
 use xwindow_core::{Kind, Slab};
@@ -53,15 +62,46 @@ struct App {
     requests: Vec<(AsyncRequestSerial, i64)>,
     next_request: i64,
     monitors: Vec<MonitorHandle>,
+    /// Under a host, when the program asked for its next turn.
+    next_turn: ControlFlow,
+}
+
+/// Who drives the loop.
+enum Driver {
+    /// The program, by pumping it.
+    #[cfg(not(target_os = "ios"))]
+    Pumped(EventLoop<()>),
+    /// The host, which runs it and gives the program turns.
+    Hosted,
 }
 
 struct Loop {
-    events: EventLoop<()>,
+    driver: Driver,
     app: App,
 }
 
 thread_local! {
     static LOOP: RefCell<Option<Loop>> = const { RefCell::new(None) };
+    /// The running loop, while the host gives the program a turn.
+    static ACTIVE: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
+}
+
+impl App {
+    fn new() -> Self {
+        App {
+            windows: Slab::new(Kind::Window),
+            ids: HashMap::new(),
+            opening: Vec::new(),
+            opened: Vec::new(),
+            resumed: false,
+            focused: None,
+            devices: HashMap::new(),
+            requests: Vec::new(),
+            next_request: 1,
+            monitors: Vec::new(),
+            next_turn: ControlFlow::Wait,
+        }
+    }
 }
 
 /// Runs `body` on the event loop, made on first use, or returns `miss`.
@@ -75,22 +115,12 @@ fn with<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
             return miss;
         };
         if slot.is_none() {
+            #[cfg(not(target_os = "ios"))]
             match EventLoop::new() {
                 Ok(events) => {
                     *slot = Some(Loop {
-                        events,
-                        app: App {
-                            windows: Slab::new(Kind::Window),
-                            ids: HashMap::new(),
-                            opening: Vec::new(),
-                            opened: Vec::new(),
-                            resumed: false,
-                            focused: None,
-                            devices: HashMap::new(),
-                            requests: Vec::new(),
-                            next_request: 1,
-                            monitors: Vec::new(),
-                        },
+                        driver: Driver::Pumped(events),
+                        app: App::new(),
                     })
                 }
                 Err(error) => {
@@ -98,9 +128,169 @@ fn with<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
                     return miss;
                 }
             }
+            #[cfg(target_os = "ios")]
+            {
+                host::raise(
+                    ErrorKind::Runtime,
+                    "window: on iOS the host runs the event loop, and opens windows in the program's turns",
+                );
+                return miss;
+            }
         }
         body(slot.as_mut().expect("made above"))
     })
+}
+
+/// The running loop, during a turn the host gives.
+fn active<T>(body: impl FnOnce(&ActiveEventLoop) -> T) -> Option<T> {
+    // Set only for the length of the callback that lent it.
+    ACTIVE.get().map(|active| body(unsafe { active.as_ref() }))
+}
+
+// -- the host's hook ----------------------------------------------------------
+
+/// How a host has the program driven, given to `attach`.
+pub enum Drive<'a> {
+    /// The program pumps the loop inside `open`, `poll` and `wait`, as it
+    /// does when no host attaches one. winit cannot pump on iOS.
+    #[cfg(not(target_os = "ios"))]
+    Pump,
+    /// The host runs the loop, and calls `turn` each time it has sorted the
+    /// events that came: the program's turn, until `turn` returns false.
+    ///
+    /// A window opens only in a turn. `poll` and `wait` return what has
+    /// come without waiting, and the last that finds nothing says when the
+    /// next turn is: `poll` at once, `wait` within its timeout, and a
+    /// negative `wait` when events come.
+    Turns(&'a mut dyn FnMut() -> bool),
+}
+
+/// The host's hook: hands the backend the event loop every window shares.
+/// Call it on the thread that will open windows, before the first opens.
+/// On Android the host builds `events` with its `AndroidApp`.
+///
+/// `Drive::Pump` returns at once. `Drive::Turns` runs the loop and returns
+/// when it ends, which on iOS it never does.
+pub fn attach(events: EventLoop<()>, drive: Drive<'_>) -> Result<(), String> {
+    let (driver, hosted) = match drive {
+        #[cfg(not(target_os = "ios"))]
+        Drive::Pump => (Driver::Pumped(events), None),
+        Drive::Turns(turn) => (Driver::Hosted, Some((events, turn))),
+    };
+    LOOP.with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return Err("window: attach cannot re-enter the event loop".to_owned());
+        };
+        if slot.is_some() {
+            return Err("window: the event loop is already made".to_owned());
+        }
+        *slot = Some(Loop {
+            driver,
+            app: App::new(),
+        });
+        Ok(())
+    })?;
+    match hosted {
+        Some((events, turn)) => events
+            .run_app(&mut Host {
+                turn,
+                came: false,
+                done: false,
+            })
+            .map_err(|error| format!("window: {error}")),
+        None => Ok(()),
+    }
+}
+
+/// The handler a host's loop runs: the backend's, and the program's turns.
+struct Host<'a> {
+    turn: &'a mut dyn FnMut() -> bool,
+    /// Something has come since the program's last turn. winit wakes for
+    /// more than the program's events, and a wake with none is no turn.
+    came: bool,
+    /// The program has ended. iOS cannot end its loop, so the loop waits.
+    done: bool,
+}
+
+impl Host<'_> {
+    /// Runs `body` on the backend's handler. winit does not re-enter its
+    /// handler, and the program's turn is not in one, so it is free.
+    fn app(&mut self, body: impl FnOnce(&mut App)) {
+        LOOP.with(|cell| {
+            if let Ok(mut slot) = cell.try_borrow_mut() {
+                if let Some(l) = slot.as_mut() {
+                    body(&mut l.app);
+                }
+            }
+        });
+    }
+}
+
+impl ApplicationHandler for Host<'_> {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: native::StartCause) {
+        self.app(|app| app.new_events(event_loop, cause));
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        self.came = true;
+        self.app(|app| app.resumed(event_loop));
+    }
+
+    fn suspended(&mut self, event_loop: &ActiveEventLoop) {
+        self.came = true;
+        self.app(|app| app.suspended(event_loop));
+    }
+
+    fn memory_warning(&mut self, event_loop: &ActiveEventLoop) {
+        self.came = true;
+        self.app(|app| app.memory_warning(event_loop));
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        self.came = true;
+        self.app(|app| app.window_event(event_loop, id, event));
+    }
+
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        id: DeviceId,
+        event: native::DeviceEvent,
+    ) {
+        self.came = true;
+        self.app(|app| app.device_event(event_loop, id, event));
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let (mut resumed, mut asked) = (false, ControlFlow::Wait);
+        self.app(|app| (resumed, asked) = (app.resumed, app.next_turn));
+        // A window has nowhere to open before the platform resumes.
+        if !resumed || self.done {
+            return;
+        }
+        let due = match asked {
+            ControlFlow::Poll => true,
+            ControlFlow::Wait => false,
+            ControlFlow::WaitUntil(deadline) => Instant::now() >= deadline,
+        };
+        if !self.came && !due {
+            event_loop.set_control_flow(asked);
+            return;
+        }
+        self.came = false;
+        self.app(|app| app.next_turn = ControlFlow::Wait);
+        ACTIVE.set(Some(NonNull::from(event_loop)));
+        self.done = !(self.turn)();
+        ACTIVE.set(None);
+        if self.done {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            event_loop.exit();
+            return;
+        }
+        let mut next = ControlFlow::Wait;
+        self.app(|app| next = app.next_turn);
+        event_loop.set_control_flow(next);
+    }
 }
 
 /// Runs `body` on the open window `handle`, or returns `miss`.
@@ -118,11 +308,24 @@ fn window<T>(handle: i32, miss: T, body: impl FnOnce(&windows::Window) -> T) -> 
 
 impl Loop {
     fn pump(&mut self, timeout: Option<Duration>) {
-        self.events.pump_app_events(timeout, &mut self.app);
+        match &mut self.driver {
+            #[cfg(not(target_os = "ios"))]
+            Driver::Pumped(events) => {
+                events.pump_app_events(timeout, &mut self.app);
+            }
+            Driver::Hosted => {
+                let _ = timeout;
+            }
+        }
+    }
+
+    fn hosted(&self) -> bool {
+        matches!(self.driver, Driver::Hosted)
     }
 
     /// The next event `handle` has, pumping once when it has none, and
-    /// waiting until `deadline` for one when there is a deadline.
+    /// waiting until `deadline` for one when there is a deadline. Under a
+    /// host, it asks for the next turn instead.
     fn next(&mut self, handle: i32, deadline: Option<Option<Instant>>) -> Event {
         if self.app.windows.get(handle).is_none() {
             return Event::None;
@@ -135,6 +338,14 @@ impl Loop {
                 .and_then(|open| open.events.pop_front())
             {
                 return event;
+            }
+            if self.hosted() {
+                self.app.next_turn = match deadline {
+                    None => ControlFlow::Poll,
+                    Some(None) => ControlFlow::Wait,
+                    Some(Some(deadline)) => ControlFlow::WaitUntil(deadline),
+                };
+                return Event::None;
             }
             let timeout = match deadline {
                 None => Some(Duration::ZERO),
@@ -778,12 +989,28 @@ pub unsafe fn window_open(a: &WindowAttributes) -> i32 {
         .unwrap_or_default();
     with(0, |l| {
         l.app.opening.push((attributes, sizing));
-        // winit makes windows only while it runs, and on some platforms not
-        // in its first pass.
-        for _ in 0..16 {
-            l.pump(Some(Duration::ZERO));
-            if !l.app.opened.is_empty() {
-                break;
+        if l.hosted() {
+            if active(|event_loop| l.app.open_waiting(event_loop)).is_none() {
+                l.app.opening.clear();
+                host::raise(
+                    ErrorKind::Runtime,
+                    "window: under a host's event loop, a window opens in the program's turn",
+                );
+                return 0;
+            }
+        } else {
+            // winit makes windows only while it runs, once the platform has
+            // resumed, which on Android comes when the activity has a
+            // surface; and on some platforms not in its first pass.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut passes = 0;
+            while l.app.opened.is_empty() && passes < 16 && Instant::now() < deadline {
+                if l.app.resumed {
+                    passes += 1;
+                    l.pump(Some(Duration::ZERO));
+                } else {
+                    l.pump(Some(Duration::from_millis(50)));
+                }
             }
         }
         l.app.opening.clear();
@@ -1049,9 +1276,18 @@ pub unsafe fn window_set_cursor_image(
         Err(error) => return host::raise(ErrorKind::Type, &format!("window: {error}")),
     };
     with((), |l| {
-        let cursor = l.events.create_custom_cursor(source);
-        if let Some(open) = l.app.windows.get(handle) {
-            open.window.set_cursor(cursor);
+        let cursor = match &l.driver {
+            #[cfg(not(target_os = "ios"))]
+            Driver::Pumped(events) => Some(events.create_custom_cursor(source)),
+            Driver::Hosted => active(|event_loop| event_loop.create_custom_cursor(source)),
+        };
+        match (cursor, l.app.windows.get(handle)) {
+            (Some(cursor), Some(open)) => open.window.set_cursor(cursor),
+            (None, _) => host::raise(
+                ErrorKind::Runtime,
+                "window: under a host's event loop, a cursor is made in the program's turn",
+            ),
+            _ => {}
         }
     });
 }
