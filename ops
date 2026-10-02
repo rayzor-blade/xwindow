@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790984296,"nonce":"DcH9500jf4fgEWTuDddJA1givoY=","message":"Fixed in hlwindow b0d1b290bfaf20ceeb45b125b9ce6811aa9e7d2a: scripts/gpu_test.sh [native|page]. Passed natively (159 frames) and in headless Chrome (217 frames), each with the triangle found in a screenshot.","files":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":4,"timestamp":1790984296,"nonce":"EKxNZko6z5QGx5oJ/++Q8uplWlU=","status":2}]}
