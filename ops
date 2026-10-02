@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790984295,"nonce":"Wnp2P+uxHen2/akvnlyC/2iY70Y=","message":"Fixed in c61708851780492e1b818ee0bfa90ae2abaf230f. The desktop test's routing and close checks pass under Wayland.","files":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":4,"timestamp":1790984295,"nonce":"3KjFt1MW6mpiWb5m2/BmGqYcuJg=","status":2}]}
