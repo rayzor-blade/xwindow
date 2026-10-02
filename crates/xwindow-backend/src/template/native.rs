@@ -46,6 +46,8 @@ struct Open {
     window: windows::Window,
     events: VecDeque<Event>,
     sizing: ScaleSizing,
+    /// What the program set: winit reads no title back on X11 and others.
+    title: String,
 }
 
 struct App {
@@ -373,6 +375,7 @@ impl Loop {
 impl App {
     fn open_waiting(&mut self, event_loop: &ActiveEventLoop) {
         for (attributes, sizing) in std::mem::take(&mut self.opening) {
+            let title = attributes.title.clone();
             let made = match event_loop.create_window(attributes) {
                 Ok(window) => {
                     let id = window.id();
@@ -380,6 +383,7 @@ impl App {
                         window,
                         events: VecDeque::new(),
                         sizing,
+                        title,
                     });
                     self.ids.insert(id, handle);
                     Ok(handle)
@@ -1083,7 +1087,13 @@ pub unsafe fn window_scale_factor(handle: i32) -> f64 {
 }
 
 pub unsafe fn window_title(handle: i32) -> Text {
-    let title = window(handle, String::new(), |w| w.title());
+    let title = with(String::new(), |l| {
+        l.app
+            .windows
+            .get(handle)
+            .map(|open| open.title.clone())
+            .unwrap_or_default()
+    });
     Text::new(&title)
 }
 
@@ -1143,7 +1153,12 @@ pub unsafe fn window_raw(handle: i32, which: i32) -> i64 {
 }
 
 pub unsafe fn window_set_title(handle: i32, title: Text) {
-    window(handle, (), |w| w.set_title(title.as_str()));
+    with((), |l| {
+        if let Some(open) = l.app.windows.get_mut(handle) {
+            open.window.set_title(title.as_str());
+            open.title = title.as_str().to_owned();
+        }
+    });
 }
 
 pub unsafe fn window_set_size(handle: i32, width: i32, height: i32) {
