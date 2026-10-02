@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1790962303,"nonce":"L3ndALLizLI0A9jbOqFOdtbBMbw=","added":["bug area:backend"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790972172,"nonce":"5Jto2duifqjdkBZcoLfbYtYQmGM=","message":"CONTRIBUTING no longer lists Android as working (3ffe43e787c7a8b1562c1f20654b8b77bfce8bf9). The backend still needs the host's AndroidApp.","files":null}]}
