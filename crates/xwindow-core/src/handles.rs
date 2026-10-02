@@ -16,6 +16,7 @@ const GEN_MASK: i32 = (1 << GEN_BITS) - 1;
 pub enum Kind {
     Window = 1,
     Monitor = 2,
+    VideoMode = 3,
 }
 
 /// Live objects of one kind.

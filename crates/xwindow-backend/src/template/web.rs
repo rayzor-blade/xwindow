@@ -588,6 +588,14 @@ pub unsafe fn window_y(_: i32) -> i32 {
     0
 }
 
+pub unsafe fn window_inner_x(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn window_inner_y(_: i32) -> i32 {
+    0
+}
+
 pub unsafe fn window_scale_factor(handle: i32) -> f64 {
     with(handle, 1.0, |p| p.scale)
 }
@@ -711,6 +719,25 @@ pub unsafe fn window_set_scale_sizing(handle: i32, sizing: i32) {
     });
 }
 
+pub unsafe fn window_set_icon(_: i32, _: Buffer, _: i32, _: i32) {}
+
+pub unsafe fn window_set_resize_increments(_: i32, _: i32, _: i32) {}
+
+pub unsafe fn window_set_enabled_buttons(_: i32, _: bool, _: bool, _: bool) {}
+
+/// A page has no video modes to give.
+pub unsafe fn window_set_exclusive_fullscreen(_: i32, _: i32) {}
+
+pub unsafe fn window_drag(_: i32) -> bool {
+    false
+}
+
+pub unsafe fn window_drag_resize(_: i32, _: i32) -> bool {
+    false
+}
+
+pub unsafe fn window_show_menu(_: i32, _: f64, _: f64) {}
+
 /// Answered at the agent's next frame, with no command to send.
 pub unsafe fn window_request_redraw(handle: i32) {
     with(handle, (), |_| BLOCK.redraw.store(1, SeqCst));
@@ -785,6 +812,20 @@ pub unsafe fn window_set_cursor_grab(handle: i32, grab: i32) -> bool {
     })
 }
 
+/// Pointer input passes through the canvas to the page beneath it.
+pub unsafe fn window_set_cursor_hittest(handle: i32, yes: bool) -> bool {
+    with(handle, false, |p| {
+        let value = if yes { "auto" } else { "none" };
+        p.commands.css_style_declaration_set_property(
+            STYLE,
+            &"pointer-events".to_owned(),
+            &value.to_owned(),
+            &None,
+        );
+        true
+    })
+}
+
 pub unsafe fn window_set_cursor_position(_: i32, _: f64, _: f64) -> bool {
     false
 }
@@ -801,6 +842,8 @@ pub unsafe fn window_set_ime_cursor_area(handle: i32, x: f64, y: f64, width: f64
             .xw_agent_set_ime_area(AGENT, &x, &y, &width.max(0.0), &height.max(0.0))
     });
 }
+
+pub unsafe fn window_set_ime_purpose(_: i32, _: i32) {}
 
 pub unsafe fn window_request_activation_token(_: i32) -> i64 {
     0
@@ -868,5 +911,39 @@ pub unsafe fn monitor_scale_factor(handle: i32) -> f64 {
 }
 
 pub unsafe fn monitor_refresh_rate(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn monitor_video_mode_count(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn monitor_video_mode(_: i32, _: i32) -> i32 {
+    0
+}
+
+// -- video modes --------------------------------------------------------------
+
+pub unsafe fn video_mode_valid(_: i32) -> bool {
+    false
+}
+
+pub unsafe fn video_mode_width(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn video_mode_height(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn video_mode_bit_depth(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn video_mode_refresh_rate(_: i32) -> i32 {
+    0
+}
+
+pub unsafe fn video_mode_monitor(_: i32) -> i32 {
     0
 }

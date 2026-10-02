@@ -23,6 +23,25 @@ enum ScaleSizing {
     Physical,
 }
 
+/// The edge or corner `dragResizeWindow` resizes from.
+enum ResizeDirection {
+    East,
+    North,
+    NorthEast,
+    NorthWest,
+    South,
+    SouthEast,
+    SouthWest,
+    West,
+}
+
+/// What an input method is told the text is for.
+enum ImePurpose {
+    Normal,
+    Password,
+    Terminal,
+}
+
 enum CursorGrab {
     None,
     Confined,
@@ -310,6 +329,15 @@ struct WindowAttributes {
     windowLevel: Option<Enum<WindowLevel>>,
     theme: Option<Enum<Theme>>,
     scaleSizing: Option<Enum<ScaleSizing>>,
+    /// RGBA pixels, `iconWidth` by `iconHeight`.
+    icon: Option<Buffer>,
+    iconWidth: Option<i32>,
+    iconHeight: Option<i32>,
+    resizeIncrementWidth: Option<i32>,
+    resizeIncrementHeight: Option<i32>,
+    closeButton: Option<bool>,
+    minimizeButton: Option<bool>,
+    maximizeButton: Option<bool>,
 }
 
 trait Window {
@@ -342,6 +370,11 @@ trait Window {
     fn x(this: &Window) -> i32;
     #[native(window_y)]
     fn y(this: &Window) -> i32;
+    /// Where the window's content is, without its frame.
+    #[native(window_inner_x)]
+    fn innerX(this: &Window) -> i32;
+    #[native(window_inner_y)]
+    fn innerY(this: &Window) -> i32;
     #[native(window_scale_factor)]
     fn scaleFactor(this: &Window) -> f64;
     #[native(window_title)]
@@ -405,6 +438,26 @@ trait Window {
     fn setContentProtected(this: &Window, protected: bool);
     #[native(window_set_scale_sizing)]
     fn setScaleSizing(this: &Window, sizing: Enum<ScaleSizing>);
+    /// RGBA pixels, `width` by `height`; an empty buffer removes the icon.
+    #[native(window_set_icon)]
+    fn setIcon(this: &Window, rgba: Buffer, width: i32, height: i32);
+    /// The steps a user resizes the window by; zero by zero removes them.
+    #[native(window_set_resize_increments)]
+    fn setResizeIncrements(this: &Window, width: i32, height: i32);
+    #[native(window_set_enabled_buttons)]
+    fn setEnabledButtons(this: &Window, close: bool, minimize: bool, maximize: bool);
+    /// Fullscreen in a video mode of one of the window's monitors.
+    #[native(window_set_exclusive_fullscreen)]
+    fn setExclusiveFullscreen(this: &Window, mode: &VideoMode);
+    /// Move the window with the pointer while a button is held, as from an
+    /// undecorated window's title bar; whether the platform started it.
+    #[native(window_drag)]
+    fn dragWindow(this: &Window) -> bool;
+    #[native(window_drag_resize)]
+    fn dragResizeWindow(this: &Window, direction: Enum<ResizeDirection>) -> bool;
+    /// The system's window menu, at a logical position in the window.
+    #[native(window_show_menu)]
+    fn showWindowMenu(this: &Window, x: f64, y: f64);
     #[native(window_request_redraw)]
     fn requestRedraw(this: &Window);
     #[native(window_focus)]
@@ -423,12 +476,18 @@ trait Window {
     /// Whether the platform took the grab.
     #[native(window_set_cursor_grab)]
     fn setCursorGrab(this: &Window, grab: Enum<CursorGrab>) -> bool;
+    /// Whether pointer input reaches the window rather than passing
+    /// through it; whether the platform took the setting.
+    #[native(window_set_cursor_hittest)]
+    fn setCursorHittest(this: &Window, hittest: bool) -> bool;
     /// Whether the platform moved the cursor.
     #[native(window_set_cursor_position)]
     fn setCursorPosition(this: &Window, x: f64, y: f64) -> bool;
 
     #[native(window_set_ime_allowed)]
     fn setImeAllowed(this: &Window, allowed: bool);
+    #[native(window_set_ime_purpose)]
+    fn setImePurpose(this: &Window, purpose: Enum<ImePurpose>);
     #[native(window_set_ime_cursor_area)]
     fn setImeCursorArea(this: &Window, x: f64, y: f64, width: f64, height: f64);
     /// A request's serial, which its `ActivationTokenDone` carries; zero
@@ -466,4 +525,27 @@ trait Monitor {
     /// Millihertz; zero when the platform does not say.
     #[native(monitor_refresh_rate)]
     fn refreshRate(this: &Monitor) -> i32;
+    #[native(monitor_video_mode_count)]
+    fn videoModeCount(this: &Monitor) -> i32;
+    /// A video mode whose `valid` is false past the last.
+    #[native(monitor_video_mode)]
+    fn videoMode(this: &Monitor, index: i32) -> Box<VideoMode>;
+}
+
+/// A size, depth and refresh rate a monitor can run at, for exclusive
+/// fullscreen. The same mode is the same handle.
+trait VideoMode {
+    #[native(video_mode_valid)]
+    fn valid(this: &VideoMode) -> bool;
+    #[native(video_mode_width)]
+    fn width(this: &VideoMode) -> i32;
+    #[native(video_mode_height)]
+    fn height(this: &VideoMode) -> i32;
+    #[native(video_mode_bit_depth)]
+    fn bitDepth(this: &VideoMode) -> i32;
+    /// Millihertz.
+    #[native(video_mode_refresh_rate)]
+    fn refreshRate(this: &VideoMode) -> i32;
+    #[native(video_mode_monitor)]
+    fn monitor(this: &VideoMode) -> Box<Monitor>;
 }

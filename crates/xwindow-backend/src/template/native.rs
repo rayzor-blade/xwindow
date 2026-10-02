@@ -27,7 +27,7 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{self as native, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, ControlFlow, EventLoop};
 use winit::keyboard as keys;
-use winit::monitor::MonitorHandle;
+use winit::monitor::{MonitorHandle, VideoModeHandle};
 #[cfg(not(target_os = "ios"))]
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{self as windows, WindowId};
@@ -35,11 +35,11 @@ use xwindow_core::{Kind, Slab};
 
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::{
-    Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, Key,
-    KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
+    Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, ImePurpose,
+    Key, KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
     MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalFloat,
-    OptionalText, PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, VariantBytes,
-    WindowAttributes, WindowLevel,
+    OptionalText, PhysicalKey, ResizeDirection, ScaleSizing, Theme, TouchForce, TouchPhase,
+    VariantBytes, WindowAttributes, WindowLevel,
 };
 
 struct Open {
@@ -64,6 +64,7 @@ struct App {
     requests: Vec<(AsyncRequestSerial, i64)>,
     next_request: i64,
     monitors: Vec<MonitorHandle>,
+    video_modes: Vec<VideoModeHandle>,
     /// Under a host, when the program asked for its next turn.
     next_turn: ControlFlow,
 }
@@ -101,6 +102,7 @@ impl App {
             requests: Vec::new(),
             next_request: 1,
             monitors: Vec::new(),
+            video_modes: Vec::new(),
             next_turn: ControlFlow::Wait,
         }
     }
@@ -432,6 +434,18 @@ impl App {
             }
         };
         monitor_handle(index)
+    }
+
+    fn video_mode(&mut self, mode: Option<VideoModeHandle>) -> i32 {
+        let Some(mode) = mode else { return 0 };
+        let index = match self.video_modes.iter().position(|m| *m == mode) {
+            Some(index) => index,
+            None => {
+                self.video_modes.push(mode);
+                self.video_modes.len() - 1
+            }
+        };
+        kept_handle(Kind::VideoMode, index)
     }
 }
 
@@ -969,12 +983,61 @@ fn attributes(a: &WindowAttributes) -> windows::WindowAttributes {
         out = out.with_window_level(window_level(level));
     }
     if let Some(theme) = a.theme.and_then(Theme::from_native) {
-        out = out.with_theme(Some(match theme {
-            Theme::Light => windows::Theme::Light,
-            Theme::Dark => windows::Theme::Dark,
-        }));
+        out = out.with_theme(Some(native_theme(theme)));
+    }
+    if let Some(rgba) = &a.icon {
+        let rgba = rgba.get();
+        match icon(
+            unsafe { rgba.as_slice() },
+            a.iconWidth.unwrap_or(0),
+            a.iconHeight.unwrap_or(0),
+        ) {
+            Ok(icon) => out = out.with_window_icon(icon),
+            Err(error) => host::raise(ErrorKind::Type, &error),
+        }
+    }
+    if let Some(size) = limit(
+        a.resizeIncrementWidth.unwrap_or(0),
+        a.resizeIncrementHeight.unwrap_or(0),
+    ) {
+        out = out.with_resize_increments(size);
+    }
+    if a.closeButton.is_some() || a.minimizeButton.is_some() || a.maximizeButton.is_some() {
+        out = out.with_enabled_buttons(buttons(
+            a.closeButton.unwrap_or(true),
+            a.minimizeButton.unwrap_or(true),
+            a.maximizeButton.unwrap_or(true),
+        ));
     }
     out
+}
+
+fn native_theme(theme: Theme) -> windows::Theme {
+    match theme {
+        Theme::Light => windows::Theme::Light,
+        Theme::Dark => windows::Theme::Dark,
+    }
+}
+
+/// An icon of `width` by `height` RGBA pixels, or none for no pixels.
+fn icon(rgba: &[u8], width: i32, height: i32) -> Result<Option<windows::Icon>, String> {
+    if rgba.is_empty() {
+        return Ok(None);
+    }
+    let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) else {
+        return Err("window: an icon is width by height RGBA pixels".to_owned());
+    };
+    windows::Icon::from_rgba(rgba.to_vec(), width, height)
+        .map(Some)
+        .map_err(|error| format!("window: {error}"))
+}
+
+fn buttons(close: bool, minimize: bool, maximize: bool) -> windows::WindowButtons {
+    let mut buttons = windows::WindowButtons::empty();
+    buttons.set(windows::WindowButtons::CLOSE, close);
+    buttons.set(windows::WindowButtons::MINIMIZE, minimize);
+    buttons.set(windows::WindowButtons::MAXIMIZE, maximize);
+    buttons
 }
 
 fn window_level(level: WindowLevel) -> windows::WindowLevel {
@@ -1080,6 +1143,14 @@ pub unsafe fn window_x(handle: i32) -> i32 {
 
 pub unsafe fn window_y(handle: i32) -> i32 {
     window(handle, 0, |w| w.outer_position().map_or(0, |p| p.y))
+}
+
+pub unsafe fn window_inner_x(handle: i32) -> i32 {
+    window(handle, 0, |w| w.inner_position().map_or(0, |p| p.x))
+}
+
+pub unsafe fn window_inner_y(handle: i32) -> i32 {
+    window(handle, 0, |w| w.inner_position().map_or(0, |p| p.y))
 }
 
 pub unsafe fn window_scale_factor(handle: i32) -> f64 {
@@ -1250,6 +1321,62 @@ pub unsafe fn window_set_scale_sizing(handle: i32, sizing: i32) {
     });
 }
 
+#[allow(unused_unsafe)]
+pub unsafe fn window_set_icon(handle: i32, rgba: Buffer, width: i32, height: i32) {
+    match icon(unsafe { rgba.as_slice() }, width, height) {
+        Ok(icon) => window(handle, (), |w| w.set_window_icon(icon)),
+        Err(error) => host::raise(ErrorKind::Type, &error),
+    }
+}
+
+pub unsafe fn window_set_resize_increments(handle: i32, width: i32, height: i32) {
+    window(handle, (), |w| {
+        w.set_resize_increments(limit(width, height))
+    });
+}
+
+pub unsafe fn window_set_enabled_buttons(handle: i32, close: bool, minimize: bool, maximize: bool) {
+    window(handle, (), |w| {
+        w.set_enabled_buttons(buttons(close, minimize, maximize))
+    });
+}
+
+pub unsafe fn window_set_exclusive_fullscreen(handle: i32, mode: i32) {
+    let Some(mode) = video_mode(mode, None, |m| Some(m.clone())) else {
+        return;
+    };
+    window(handle, (), |w| {
+        w.set_fullscreen(Some(windows::Fullscreen::Exclusive(mode)))
+    });
+}
+
+pub unsafe fn window_drag(handle: i32) -> bool {
+    window(handle, false, |w| w.drag_window().is_ok())
+}
+
+pub unsafe fn window_drag_resize(handle: i32, direction: i32) -> bool {
+    let Some(direction) = ResizeDirection::from_native(direction) else {
+        return false;
+    };
+    let direction = match direction {
+        ResizeDirection::East => windows::ResizeDirection::East,
+        ResizeDirection::North => windows::ResizeDirection::North,
+        ResizeDirection::NorthEast => windows::ResizeDirection::NorthEast,
+        ResizeDirection::NorthWest => windows::ResizeDirection::NorthWest,
+        ResizeDirection::South => windows::ResizeDirection::South,
+        ResizeDirection::SouthEast => windows::ResizeDirection::SouthEast,
+        ResizeDirection::SouthWest => windows::ResizeDirection::SouthWest,
+        ResizeDirection::West => windows::ResizeDirection::West,
+    };
+    window(handle, false, |w| w.drag_resize_window(direction).is_ok())
+}
+
+pub unsafe fn window_show_menu(handle: i32, x: f64, y: f64) {
+    window(handle, (), |w| {
+        w.show_window_menu(LogicalPosition::new(x, y))
+    });
+}
+
 pub unsafe fn window_request_redraw(handle: i32) {
     window(handle, (), |w| w.request_redraw());
 }
@@ -1335,6 +1462,19 @@ pub unsafe fn window_set_cursor_position(handle: i32, x: f64, y: f64) -> bool {
     })
 }
 
+pub unsafe fn window_set_cursor_hittest(handle: i32, yes: bool) -> bool {
+    window(handle, false, |w| w.set_cursor_hittest(yes).is_ok())
+}
+
+pub unsafe fn window_set_ime_purpose(handle: i32, purpose: i32) {
+    let purpose = match ImePurpose::from_native(purpose) {
+        Some(ImePurpose::Password) => windows::ImePurpose::Password,
+        Some(ImePurpose::Terminal) => windows::ImePurpose::Terminal,
+        _ => windows::ImePurpose::Normal,
+    };
+    window(handle, (), |w| w.set_ime_purpose(purpose));
+}
+
 pub unsafe fn window_set_ime_allowed(handle: i32, yes: bool) {
     window(handle, (), |w| w.set_ime_allowed(yes));
 }
@@ -1385,13 +1525,24 @@ pub unsafe fn window_request_activation_token(handle: i32) -> i64 {
 /// Monitors are kept for the program's life, each once, so the same display
 /// is the same handle. A program sees a handful.
 fn monitor_handle(index: usize) -> i32 {
-    ((Kind::Monitor as i32) << 26) | (index as i32 + 1)
+    kept_handle(Kind::Monitor, index)
+}
+
+/// A handle for what is kept for the program's life: the kind, and the
+/// index from one.
+fn kept_handle(kind: Kind, index: usize) -> i32 {
+    ((kind as i32) << 26) | (index as i32 + 1)
+}
+
+/// The index of a kept handle of `kind`.
+fn kept_index(kind: Kind, handle: i32) -> Option<usize> {
+    (handle >> 26 == kind as i32)
+        .then(|| (handle & ((1 << 26) - 1)) as usize)
+        .and_then(|i| i.checked_sub(1))
 }
 
 fn monitor<T>(handle: i32, miss: T, body: impl FnOnce(&MonitorHandle) -> T) -> T {
-    let index = (handle >> 26 == Kind::Monitor as i32)
-        .then(|| (handle & ((1 << 26) - 1)) as usize)
-        .and_then(|i| i.checked_sub(1));
+    let index = kept_index(Kind::Monitor, handle);
     let mut body = Some(body);
     let found = with(None, |l| {
         index
@@ -1472,4 +1623,55 @@ pub unsafe fn monitor_refresh_rate(handle: i32) -> i32 {
     monitor(handle, 0, |m| {
         m.refresh_rate_millihertz().map_or(0, |r| clamp(r))
     })
+}
+
+pub unsafe fn monitor_video_mode_count(handle: i32) -> i32 {
+    monitor(handle, 0, |m| m.video_modes().count() as i32)
+}
+
+pub unsafe fn monitor_video_mode(handle: i32, index: i32) -> i32 {
+    let found = monitor(handle, None, |m| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| m.video_modes().nth(i))
+    });
+    with(0, |l| l.app.video_mode(found))
+}
+
+// -- video modes --------------------------------------------------------------
+
+fn video_mode<T>(handle: i32, miss: T, body: impl FnOnce(&VideoModeHandle) -> T) -> T {
+    let index = kept_index(Kind::VideoMode, handle);
+    let mut body = Some(body);
+    let found = with(None, |l| {
+        index
+            .and_then(|i| l.app.video_modes.get(i))
+            .map(|m| (body.take().expect("called once"))(m))
+    });
+    found.unwrap_or(miss)
+}
+
+pub unsafe fn video_mode_valid(handle: i32) -> bool {
+    video_mode(handle, false, |_| true)
+}
+
+pub unsafe fn video_mode_width(handle: i32) -> i32 {
+    video_mode(handle, 0, |m| clamp(m.size().width))
+}
+
+pub unsafe fn video_mode_height(handle: i32) -> i32 {
+    video_mode(handle, 0, |m| clamp(m.size().height))
+}
+
+pub unsafe fn video_mode_bit_depth(handle: i32) -> i32 {
+    video_mode(handle, 0, |m| i32::from(m.bit_depth()))
+}
+
+pub unsafe fn video_mode_refresh_rate(handle: i32) -> i32 {
+    video_mode(handle, 0, |m| clamp(m.refresh_rate_millihertz()))
+}
+
+pub unsafe fn video_mode_monitor(handle: i32) -> i32 {
+    let found = video_mode(handle, None, |m| Some(m.monitor()));
+    with(0, |l| l.app.monitor(found))
 }
