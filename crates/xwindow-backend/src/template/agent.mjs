@@ -192,8 +192,18 @@ export function start({ memory, address, canvas }) {
   let lastModifiers = 0;
   let sides = 0;
   const SIDE = { Shift: 1, Control: 4, Alt: 16, Meta: 64 };
+  // The paste shortcut's presses, which the paste that follows stands for.
+  const pasteKey = (e) =>
+    (((e.key === "v" || e.key === "V") && (e.ctrlKey || e.metaKey) && !e.altKey) ||
+      (e.key === "Insert" && e.shiftKey));
+  const pasteCodes = new Set();
   const key = (pressed) => (e) => {
     if (pressed) runGated();
+    if (pressed && pasteKey(e)) {
+      pasteCodes.add(e.code);
+      return;
+    }
+    if (!pressed && pasteCodes.delete(e.code)) return;
     const side = SIDE[e.key];
     if (side && (e.location === 1 || e.location === 2)) {
       const bit = e.location === 1 ? side : side * 2;
@@ -320,6 +330,47 @@ export function start({ memory, address, canvas }) {
     placeIme();
     post({ kind: "ime-enabled" });
   };
+
+  // A paste is how a page reads the clipboard. Each type's bytes go in
+  // pieces small enough for the queue, the first of each marked, waiting for
+  // room when it is full; then the paste itself. Pastes go in turn.
+  const PIECE = 12288;
+  const base64 = (bytes) => {
+    let text = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(text);
+  };
+  const send = (event) =>
+    new Promise((done) => {
+      const again = () => (post(event) ? done() : setTimeout(again, 16));
+      again();
+    });
+  let pasting = Promise.resolve();
+  document.addEventListener(
+    "paste",
+    (e) => {
+      if (document.activeElement !== canvas && document.activeElement !== textarea) return;
+      e.preventDefault();
+      const data = e.clipboardData;
+      // Read now: the event's data is gone once it returns, its files are not.
+      const texts = [...(data?.types || [])]
+        .filter((type) => type !== "Files")
+        .map((type) => [type, encoder.encode(data.getData(type))]);
+      const files = [...(data?.files || [])];
+      pasting = pasting.then(async () => {
+        const read = (file) => file.arrayBuffer().then((b) => [file.type || "application/octet-stream", new Uint8Array(b)]);
+        for (const [type, bytes] of texts.concat(await Promise.all(files.map(read)))) {
+          for (let at = 0; at === 0 || at < bytes.length; at += PIECE) {
+            await send({ kind: "paste-data", key: type, on: at === 0, text: base64(bytes.subarray(at, at + PIECE)) });
+          }
+        }
+        await send({ kind: "paste" });
+      });
+    },
+    true,
+  );
 
   // Files dragged onto the canvas. A page learns a file's name only when it
   // is dropped, and never its path.

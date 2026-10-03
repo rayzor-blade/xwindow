@@ -49,6 +49,8 @@ fn main() {
             ("code", event.code.clone()),
             ("key", event.key.clone()),
             ("modifiers", event.modifiers.map(|v| v.to_string())),
+            // A pasted piece's base64, by its length.
+            ("base64", event.text.clone().filter(|_| event.kind == XwEventKind::PasteData).map(|t| t.len().to_string())),
         ] {
             if let Some(value) = value {
                 line.push_str(&format!(" {name}={value}"));
@@ -109,6 +111,18 @@ fire("pointermove", { pointerId: 1, pointerType: "mouse", offsetX: 10, offsetY: 
 fire("pointerdown", { pointerId: 1, pointerType: "mouse", button: 2, offsetX: 10, offsetY: 20, pressure: 0.5 });
 fire("keydown", { code: "KeyB", key: "b", location: 0, repeat: false });
 fire("keydown", { code: "KeyA", key: "a", location: 0, repeat: false, shiftKey: true });
+// The paste shortcut, which the paste stands for, then the paste: text, HTML
+// and an image larger than a piece.
+canvas.focus();
+fire("keydown", { code: "KeyV", key: "v", location: 0, repeat: false, ctrlKey: true });
+fire("keyup", { code: "KeyV", key: "v", location: 0, repeat: false, ctrlKey: true });
+const image = new Uint8Array(30000).fill(7);
+const clipboardData = {
+  types: ["text/plain", "text/html", "Files"],
+  getData: (type) => ({ "text/plain": "hi", "text/html": "<b>hi</b>" })[type] ?? "",
+  files: [{ type: "image/png", arrayBuffer: async () => image.buffer }],
+};
+document.dispatchEvent(Object.assign(new Event("paste"), { clipboardData }));
 Atomics.store(words, 44 >> 2, 1); // a redraw, asked for
 await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -175,6 +189,12 @@ fn commands_reach_the_page_and_its_events_come_back() {
             "KeyboardInput on=true code=KeyB key=b",
             "KeyboardInput on=true code=KeyA key=a",
             "ModifiersChanged modifiers=1",
+            "PasteData on=true key=text/plain base64=4",
+            "PasteData on=true key=text/html base64=12",
+            "PasteData on=true key=image/png base64=16384",
+            "PasteData on=false key=image/png base64=16384",
+            "PasteData on=false key=image/png base64=7232",
+            "Paste",
             "RedrawRequested",
             "Resized width=800 height=500 scale=2",
         ]

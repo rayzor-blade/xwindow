@@ -15,7 +15,7 @@ enum XwEventKind {
   "modifiers-changed", "ime-enabled", "ime-preedit", "ime-commit",
   "ime-disabled", "hovered-file", "dropped-file", "hovered-file-cancelled",
   "touch", "pinch-gesture", "touchpad-pressure", "mouse-motion", "suspended",
-  "resumed", "fullscreen-changed", "screen"
+  "resumed", "fullscreen-changed", "screen", "paste-data", "paste"
 };
 
 // One event; which members it has depends on its kind. Positions and sizes

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use xwindow_check::{Window, WindowAttributes};
 
 /// `Event`'s variants, in the declaration's order.
-const NAMES: [&str; 33] = [
+const NAMES: [&str; 34] = [
     "None",
     "Closed",
     "Destroyed",
@@ -41,6 +41,7 @@ const NAMES: [&str; 33] = [
     "Resumed",
     "Suspended",
     "MemoryWarning",
+    "Paste",
 ];
 
 const TURNS: u32 = 20;

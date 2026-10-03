@@ -22,7 +22,8 @@ use crate::{
     CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath, Ime, Key,
     KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
     MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalBytes,
-    OptionalText, PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, WindowAttributes,
+    OptionalText, PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, VariantBytes,
+    WindowAttributes,
 };
 
 /// The name a host starts the agent by: it imports `xwindow.mjs` beside the
@@ -82,6 +83,10 @@ struct Page {
     no_devices: bool,
     /// Each `ClipboardItems`' types and bytes, until it is written.
     clipboard_items: Slab<Vec<(String, Box<[u8]>)>>,
+    /// A paste the agent is still posting, and the last one posted whole,
+    /// which the clipboard reads answer.
+    pasting: Vec<(String, Vec<u8>)>,
+    pasted: Vec<(String, Vec<u8>)>,
 }
 
 static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
@@ -106,6 +111,8 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         screen: (0, 0, String::new()),
         no_devices: false,
         clipboard_items: Slab::new(Kind::ClipboardItems),
+        pasting: Vec::new(),
+        pasted: Vec::new(),
     })
 });
 
@@ -365,6 +372,19 @@ impl Page {
                 self.fullscreen = on;
                 return None;
             }
+            K::PasteData => {
+                let mime = mime_essence(e.key.as_deref().unwrap_or(""));
+                let bytes = base64(&text);
+                match self.pasting.last_mut() {
+                    Some((last, piece)) if !on && *last == mime => piece.extend(bytes),
+                    _ => self.pasting.push((mime, bytes)),
+                }
+                return None;
+            }
+            K::Paste => {
+                self.pasted = std::mem::take(&mut self.pasting);
+                Event::Paste
+            }
             K::Screen => {
                 self.screen = (
                     e.width.unwrap_or(0) as i32,
@@ -375,6 +395,39 @@ impl Page {
             }
         })
     }
+}
+
+/// A MIME type without its parameters, lowercased, as the native clipboard
+/// names types.
+fn mime_essence(mime: &str) -> String {
+    mime.split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// The bytes of standard base64 text; what is not base64 is skipped.
+fn base64(text: &str) -> Vec<u8> {
+    let value = |c: u8| match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut bits, mut count) = (0u32, 0);
+    for six in text.bytes().filter_map(value) {
+        bits = bits << 6 | u32::from(six);
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            out.push((bits >> count) as u8);
+        }
+    }
+    out
 }
 
 fn element_state(pressed: bool) -> MouseElementState {
@@ -550,22 +603,38 @@ pub unsafe fn window_listen_device_events(when: i32) {
     page().no_devices = DeviceEvents::from_native(when) == Some(DeviceEvents::Never);
 }
 
-/// A page reads its clipboard only asynchronously, with permission, so there
-/// is nothing to answer at once.
+/// What the user last pasted: a page reads its clipboard only as a paste.
 pub unsafe fn window_clipboard_text() -> OptionalText {
-    OptionalText::None
+    let p = page();
+    p.pasted
+        .iter()
+        .find(|(mime, _)| mime == "text/plain")
+        .and_then(|(_, bytes)| String::from_utf8(bytes.clone()).ok())
+        .map_or(OptionalText::None, |text| OptionalText::Some { text })
 }
 
 pub unsafe fn window_clipboard_type_count() -> i32 {
-    0
+    page().pasted.len() as i32
 }
 
-pub unsafe fn window_clipboard_type(_: i32) -> Text {
-    Text::new("")
+pub unsafe fn window_clipboard_type(index: i32) -> Text {
+    let p = page();
+    let name = usize::try_from(index)
+        .ok()
+        .and_then(|i| p.pasted.get(i))
+        .map_or("", |(mime, _)| mime.as_str());
+    Text::new(name)
 }
 
-pub unsafe fn window_clipboard_data(_: Text) -> OptionalBytes {
-    OptionalBytes::None
+pub unsafe fn window_clipboard_data(mime: Text) -> OptionalBytes {
+    let mime = mime_essence(mime.as_str());
+    let p = page();
+    p.pasted
+        .iter()
+        .find(|(m, _)| *m == mime)
+        .map_or(OptionalBytes::None, |(_, bytes)| OptionalBytes::Some {
+            bytes: VariantBytes(bytes.clone()),
+        })
 }
 
 pub unsafe fn clipboard_items_create() -> i32 {

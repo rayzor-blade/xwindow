@@ -316,6 +316,12 @@ enum Event {
     Resumed,
     Suspended,
     MemoryWarning,
+    /// In a page, the user pasted: `clipboardText`, `clipboardTypeCount`,
+    /// `clipboardType` and `clipboardData` answer what was pasted until the
+    /// next paste, and the paste shortcut's key presses do not come. Other
+    /// platforms send none: a program reads the clipboard when its paste
+    /// shortcut is pressed.
+    Paste,
 }
 
 /// What a window opens with; whatever is left unset is the platform's
