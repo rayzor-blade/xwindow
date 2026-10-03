@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1790987763,"nonce":"9Ijt4UXz/ECuGMBubqzogLhdcqU=","added":["bug","area:build"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790987947,"nonce":"uZzNcQpq/CaNknFP3EQPSOCxras=","message":"Fixed in 3f924736e44f4611260b6a452779b47a04fb8884. CI run 37082808184: desktop-windows passes the cursor grab check.","files":null}]}
