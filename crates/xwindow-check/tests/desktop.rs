@@ -750,9 +750,9 @@ impl Desktop {
         let grab = |mode: CursorGrab| unsafe { native::window_set_cursor_grab(h, mode.native()) };
         // What winit supports where.
         let (confined, locked) = match self.platform {
-            Platform::X11 | Platform::Win32 => (true, false),
+            Platform::X11 => (true, false),
             Platform::AppKit => (false, true),
-            Platform::Wayland | Platform::Other => (true, true),
+            Platform::Win32 | Platform::Wayland | Platform::Other => (true, true),
         };
         let mut wrong = Vec::new();
         if grab(CursorGrab::Confined) != confined {
