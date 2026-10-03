@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1790984427,"nonce":"adY26szQITOQ8mtyaJbMCE48wH0=","added":["area:build"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790989910,"nonce":"/dzfUJH2TBAil6sIpxpHZSTQPHQ=","message":"Fixed in 46387fd63a673348a32477f3b2e79ac69b7f2054: every generator takes window_api() as text. Both Haxe surfaces came out identical to before; CI passed on it.","files":null}]}
