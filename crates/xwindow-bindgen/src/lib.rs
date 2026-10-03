@@ -3,9 +3,6 @@
 //! `window` classes, enums and method names from one declaration; only the
 //! carriers differ.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 pub use x_idl::haxe::{self};
 pub use x_idl::wire;
 
@@ -55,23 +52,6 @@ pub fn window_api() -> String {
     )
 }
 
-/// Run `generate` over the declaration, written where x-idl reads it: a
-/// file of this call's own, so parallel builds never share one.
-fn with_declaration<T>(
-    generate: impl FnOnce(Option<PathBuf>) -> Result<T, String>,
-) -> Result<T, String> {
-    static CALLS: AtomicUsize = AtomicUsize::new(0);
-    let path = std::env::temp_dir().join(format!(
-        "window.api.{}.{}.rs",
-        std::process::id(),
-        CALLS.fetch_add(1, Ordering::Relaxed)
-    ));
-    std::fs::write(&path, window_api()).map_err(|e| format!("window.api.rs: {e}"))?;
-    let result = generate(Some(path.clone()));
-    std::fs::remove_file(&path).ok();
-    result
-}
-
 /// The typed model and ABI for `runtime`, to `include!` at the crate root
 /// beside `mod backend`:
 ///
@@ -79,26 +59,26 @@ fn with_declaration<T>(
 /// - HashLink: the model and its `DEFINE_PRIM` resolvers, in `xwindow`.
 /// - Rayzor: the model, `XIDL_METHODS` and `xidl_runtime_symbols()`.
 pub fn generate(runtime: Runtime) -> Result<String, String> {
-    let idl = browser_idl();
-    with_declaration(|declaration| match runtime {
-        Runtime::Caribou => x_idl::generate_caribou(NAMESPACE, declaration, &idl),
-        Runtime::HashLink => LIBRARY.generate_hashlink(NAMESPACE, declaration, &idl),
-        Runtime::Rayzor => LIBRARY.generate_rayzor(NAMESPACE, declaration, &idl, &[]),
-    })
+    let (api, idl) = (window_api(), browser_idl());
+    match runtime {
+        Runtime::Caribou => x_idl::generate_caribou(NAMESPACE, api, &idl),
+        Runtime::HashLink => LIBRARY.generate_hashlink(NAMESPACE, api, &idl),
+        Runtime::Rayzor => LIBRARY.generate_rayzor(NAMESPACE, api, &idl, &[]),
+    }
 }
 
 /// The `backend` module for a browser build: each function `implemented`
 /// (xwindow-backend's `WEB`) defines forwards to `crate::web`, and any other
 /// raises that it is not available in a page.
 pub fn web_backend(runtime: Runtime, implemented: &str) -> Result<String, String> {
-    let idl = browser_idl();
-    with_declaration(|declaration| match runtime {
-        Runtime::Caribou => x_idl::web_backend(NAMESPACE, declaration, &idl, implemented),
+    let (api, idl) = (window_api(), browser_idl());
+    match runtime {
+        Runtime::Caribou => x_idl::web_backend(NAMESPACE, api, &idl, implemented),
         // Rayzor's model takes the same carriers by the same names.
         Runtime::HashLink | Runtime::Rayzor => {
-            x_idl::hashlink_web_backend(NAMESPACE, declaration, &idl, implemented)
+            x_idl::hashlink_web_backend(NAMESPACE, api, &idl, implemented)
         }
-    })
+    }
 }
 
 /// The browser wire: Rust for `crate::wire`, and the JavaScript a page
@@ -110,6 +90,5 @@ pub fn browser_wire() -> Result<wire::Wire, String> {
 /// The conventional Haxe surface for HashLink/Ash or Rayzor, in package
 /// `window`.
 pub fn haxe(runtime: haxe::Runtime) -> Result<Vec<haxe::File>, String> {
-    let idl = browser_idl();
-    with_declaration(|declaration| LIBRARY.haxe(NAMESPACE, declaration, &idl, runtime))
+    LIBRARY.haxe(NAMESPACE, window_api(), &browser_idl(), runtime)
 }
