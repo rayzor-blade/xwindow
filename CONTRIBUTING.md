@@ -187,3 +187,15 @@ cargo run -p xwindow-bindgen --bin xwindow-haxe -- ash /tmp/xwindow-ash
 cargo run -p xwindow-bindgen --bin xwindow-haxe -- rayzor /tmp/xwindow-rayzor
 haxe -cp /tmp/xwindow-ash -cp examples/events -main Main -hl /tmp/events.hl
 ```
+
+`XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop` opens real
+windows and drives them with synthetic input. It drives X11 with xdotool,
+sway and GNOME on Wayland, and Windows; CI runs it on X11, sway and
+Windows. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
+private headless GNOME Shell, beside any session already open, and can
+screenshot the monitor while it runs:
+
+```sh
+scripts/gnome_session.py -- env XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop
+scripts/gnome_session.py --x11 --shot 2:frame.png -- cargo run -p xwindow-check --example host
+```

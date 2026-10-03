@@ -1,6 +1,7 @@
 //! Opens real windows through the native backend and drives them with
-//! synthetic input: xdotool on X11, a virtual pointer and keyboard under
-//! sway on Wayland, SendInput on Windows. Each check prints PASS, FAIL or
+//! synthetic input: xdotool on X11; on Wayland, a virtual pointer and
+//! keyboard under sway or mutter's RemoteDesktop under GNOME; SendInput on
+//! Windows. Each check prints PASS, FAIL or
 //! SKIP, and any FAIL fails the run.
 //!
 //! It is a plain binary, not a libtest harness, because winit wants the main
@@ -25,12 +26,6 @@ const TRACE: &str = "XWINDOW_DESKTOP_TRACE";
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const QUIET: Duration = Duration::from_millis(400);
-
-/// Known backend defects that checks step around until they are fixed.
-const TITLE_ON_X11: &str =
-    "git-bug 15bae522b8544e106681570499b1dd0929050fd2920d7e27c3216b3c027fcca8";
-const SET_SIZE_ON_WAYLAND: &str =
-    "git-bug c5d0ce44ae99708ede11517ba17985b711ca522449960910d899827f0c51647c";
 
 const A: usize = 0;
 const B: usize = 1;
@@ -410,7 +405,6 @@ impl Desktop {
     }
 
     fn describe(&mut self) -> Checked {
-        let mut skipped = None;
         for w in [A, B] {
             let h = self.handle(w);
             let (width, height) = unsafe { (native::window_width(h), native::window_height(h)) };
@@ -418,11 +412,7 @@ impl Desktop {
                 return Err(format!("window {} is {width}x{height}", self.wins[w].name));
             }
             let title = unsafe { native::window_title(h) };
-            if title.as_str().is_empty() && self.platform == Platform::X11 {
-                skipped = Some(format!(
-                    "sizes and monitor pass; title readback skipped, {TITLE_ON_X11}"
-                ));
-            } else if title.as_str() != self.wins[w].title {
+            if title.as_str() != self.wins[w].title {
                 return Err(format!(
                     "window {} reads back title {:?}, not {:?}",
                     self.wins[w].name,
@@ -445,44 +435,20 @@ impl Desktop {
         if !unsafe { native::monitor_valid(monitor) } || mw <= 0 || mh <= 0 {
             return Err(format!("current monitor {monitor} is {mw}x{mh}"));
         }
-        Ok(skipped)
-    }
-
-    /// Waits for `w`'s Resized after a setSize to logical `size`.
-    fn resized_by_set_size(&mut self, w: usize, from: usize, size: (i32, i32)) -> Checked {
-        let what = format!("Resized after {}'s setSize", self.wins[w].name);
-        let why = match self.expect(w, from, &what, |e| matches!(e, Event::Resized { .. })) {
-            Ok(_) => return Ok(None),
-            Err(why) => why,
-        };
-        let h = self.handle(w);
-        let scale = self.scale(w);
-        let want = (
-            (f64::from(size.0) * scale).round() as i32,
-            (f64::from(size.1) * scale).round() as i32,
-        );
-        let got = unsafe { (native::window_width(h), native::window_height(h)) };
-        if self.platform == Platform::Wayland && got == want {
-            skip(format!(
-                "{} is {got:?} with no Resized, {SET_SIZE_ON_WAYLAND}",
-                self.wins[w].name
-            ))
-        } else {
-            Err(why)
-        }
+        Ok(None)
     }
 
     fn routed(&mut self) -> Checked {
         let resized = |e: &Event| matches!(e, Event::Resized { .. });
-        let mut skipped = None;
         for (w, other, size) in [(B, A, (360, 260)), (A, B, (340, 250))] {
             let marks = self.marks();
             unsafe { native::window_set_size(self.handle(w), size.0, size.1) };
-            skipped = self.resized_by_set_size(w, marks[w], size)?.or(skipped);
+            let what = format!("Resized after {}'s setSize", self.wins[w].name);
+            self.expect(w, marks[w], &what, resized)?;
             self.pump(QUIET);
             self.absent(other, marks[other], "a Resized", resized)?;
         }
-        Ok(skipped)
+        Ok(None)
     }
 
     fn backend_focus(&mut self) -> Checked {
@@ -898,8 +864,10 @@ impl Desktop {
         }
         let marks = self.marks();
         unsafe { native::window_set_size(a, 300, 220) };
-        let resized = self.resized_by_set_size(A, marks[A], (300, 220))?;
-        Ok(resized.map(|why| format!("B closed cleanly; {why}")))
+        self.expect(A, marks[A], "Resized after A's setSize", |e| {
+            matches!(e, Event::Resized { .. })
+        })?;
+        Ok(None)
     }
 }
 
@@ -1059,7 +1027,13 @@ fn input_for(platform: Platform, wins: &[Win]) -> Result<Box<dyn Input>, String>
             Ok(Box::new(Xdotool))
         }
         #[cfg(target_os = "linux")]
-        Platform::Wayland => Sway::new(wins).map(|s| Box::new(s) as Box<dyn Input>),
+        Platform::Wayland if std::env::var_os("SWAYSOCK").is_some() => {
+            Sway::new(wins).map(|s| Box::new(s) as Box<dyn Input>)
+        }
+        #[cfg(target_os = "linux")]
+        Platform::Wayland => gnome::Mutter::new(wins)
+            .map(|m| Box::new(m) as Box<dyn Input>)
+            .map_err(|why| format!("not under sway (no SWAYSOCK), and not under GNOME: {why}")),
         #[cfg(windows)]
         Platform::Win32 => Ok(Box::new(windows_input::SendInput)),
         Platform::AppKit => Err("no synthetic input on macOS".into()),
@@ -1141,9 +1115,6 @@ struct Sway {
 #[cfg(target_os = "linux")]
 impl Sway {
     fn new(wins: &[Win]) -> Result<Self, String> {
-        if std::env::var_os("SWAYSOCK").is_none() {
-            return Err("not under sway (no SWAYSOCK); no other compositor is driven".into());
-        }
         // The one output; a window not yet shown on it has no current monitor.
         let monitor = unsafe { native::window_monitor(wins[0].handle, 0) };
         let extent = unsafe {
@@ -1210,6 +1181,302 @@ impl Input for Sway {
             Stroke::A => self.seat.keys(&[(KEY_A, 0)]),
             Stroke::ShiftB => self.seat.keys(&[(KEY_LEFTSHIFT, SHIFT), (KEY_B, SHIFT)]),
             Stroke::Left => self.seat.keys(&[(KEY_LEFT, 0)]),
+        }
+    }
+}
+
+/// Wayland under GNOME: mutter's RemoteDesktop gives the input, over a
+/// screen cast of the monitor its absolute pointer motion is placed on. A
+/// Wayland client cannot read where its window is, so each window's place is
+/// found by sweeping the pointer until the window reports it. GNOME focuses a
+/// window when it is clicked.
+#[cfg(target_os = "linux")]
+mod gnome {
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+
+    use zbus::blocking::{Connection, Proxy};
+    use zbus::zvariant::{OwnedObjectPath, Value};
+
+    use super::{Event, Input, Stroke, Win, native};
+
+    // evdev codes.
+    const KEY_A: u32 = 30;
+    const KEY_B: u32 = 48;
+    const KEY_LEFTSHIFT: u32 = 42;
+    const KEY_LEFT: u32 = 105;
+    const BTN_LEFT: i32 = 0x110;
+    /// Sweep spacing; smaller than either window.
+    const STEP: usize = 60;
+
+    pub struct Mutter {
+        // The sessions live as long as the connection that asked for them.
+        _connection: Connection,
+        session: Proxy<'static>,
+        stream: OwnedObjectPath,
+        /// Each window's client area on the monitor, by title.
+        origins: Vec<(&'static str, f64, f64)>,
+    }
+
+    fn fail(what: &str) -> impl Fn(zbus::Error) -> String + '_ {
+        move |e| format!("{what}: {e}")
+    }
+
+    impl Mutter {
+        pub fn new(wins: &[Win]) -> Result<Self, String> {
+            let connection = Connection::session().map_err(fail("the session bus"))?;
+            let remote = Proxy::new(
+                &connection,
+                "org.gnome.Mutter.RemoteDesktop",
+                "/org/gnome/Mutter/RemoteDesktop",
+                "org.gnome.Mutter.RemoteDesktop",
+            )
+            .map_err(fail("RemoteDesktop"))?;
+            let path: OwnedObjectPath = remote
+                .call("CreateSession", &())
+                .map_err(fail("RemoteDesktop.CreateSession"))?;
+            let session = Proxy::new(
+                &connection,
+                "org.gnome.Mutter.RemoteDesktop",
+                path,
+                "org.gnome.Mutter.RemoteDesktop.Session",
+            )
+            .map_err(fail("the remote desktop session"))?;
+            let id: String = session
+                .get_property("SessionId")
+                .map_err(fail("SessionId"))?;
+            let cast = Proxy::new(
+                &connection,
+                "org.gnome.Mutter.ScreenCast",
+                "/org/gnome/Mutter/ScreenCast",
+                "org.gnome.Mutter.ScreenCast",
+            )
+            .map_err(fail("ScreenCast"))?;
+            let linked = HashMap::from([("remote-desktop-session-id", Value::from(id))]);
+            let path: OwnedObjectPath = cast
+                .call("CreateSession", &(linked,))
+                .map_err(fail("ScreenCast.CreateSession"))?;
+            let cast_session = Proxy::new(
+                &connection,
+                "org.gnome.Mutter.ScreenCast",
+                path,
+                "org.gnome.Mutter.ScreenCast.Session",
+            )
+            .map_err(fail("the screen cast session"))?;
+            // The primary monitor.
+            let stream: OwnedObjectPath = cast_session
+                .call("RecordMonitor", &("", HashMap::<&str, Value>::new()))
+                .map_err(fail("RecordMonitor"))?;
+            let () = session.call("Start", &()).map_err(fail("Start"))?;
+            let mut mutter = Self {
+                _connection: connection,
+                session,
+                stream,
+                origins: Vec::new(),
+            };
+            // The seat has a keyboard, which focus is, only once one types.
+            mutter.key_strokes(&[KEY_LEFTSHIFT])?;
+            mutter.find(wins)?;
+            mutter.separate(wins)?;
+            for (title, x, y) in &mutter.origins {
+                println!("desktop: {title} found at {x}, {y}");
+            }
+            Ok(mutter)
+        }
+
+        fn to(&self, x: f64, y: f64) -> Result<(), String> {
+            self.session
+                .call::<_, _, ()>("NotifyPointerMotionAbsolute", &(self.stream.as_str(), x, y))
+                .map_err(fail("NotifyPointerMotionAbsolute"))
+        }
+
+        /// Sweeps the monitor until every window has reported the pointer.
+        fn find(&mut self, wins: &[Win]) -> Result<(), String> {
+            let monitor = unsafe { native::window_monitor(wins[0].handle, 0) };
+            let (width, height) = unsafe {
+                (
+                    native::monitor_width(monitor),
+                    native::monitor_height(monitor),
+                )
+            };
+            if width <= 0 || height <= 0 {
+                return Err(format!("the monitor measures {width}x{height}"));
+            }
+            for y in (STEP / 2..height as usize).step_by(STEP) {
+                for x in (STEP / 2..width as usize).step_by(STEP) {
+                    self.to(x as f64, y as f64)?;
+                    let end = Instant::now() + Duration::from_millis(15);
+                    while Instant::now() < end {
+                        for w in wins {
+                            let event = unsafe { native::window_wait(w.handle, 0.005) };
+                            if let Event::CursorMoved { x: cx, y: cy, .. } = event {
+                                if !self.origins.iter().any(|(t, ..)| *t == w.title) {
+                                    let scale = unsafe { native::window_scale_factor(w.handle) };
+                                    self.origins.push((
+                                        w.title,
+                                        x as f64 - cx / scale,
+                                        y as f64 - cy / scale,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if self.origins.len() == wins.len() {
+                        return Ok(());
+                    }
+                }
+            }
+            Err(format!(
+                "the pointer found {} of {} windows on the monitor",
+                self.origins.len(),
+                wins.len()
+            ))
+        }
+
+        /// A window's client area on the monitor: origin and logical size.
+        fn rect(&self, w: &Win) -> Result<(f64, f64, f64, f64), String> {
+            let &(_, x, y) = self
+                .origins
+                .iter()
+                .find(|(title, ..)| *title == w.title)
+                .ok_or("an unfound window")?;
+            let scale = unsafe { native::window_scale_factor(w.handle) };
+            let (width, height) = unsafe {
+                (
+                    native::window_width(w.handle),
+                    native::window_height(w.handle),
+                )
+            };
+            Ok((x, y, f64::from(width) / scale, f64::from(height) / scale))
+        }
+
+        /// GNOME cascades new windows, so the second overlaps the first;
+        /// the second is dragged clear of it with `dragWindow`, which is how
+        /// a Wayland client moves itself.
+        fn separate(&mut self, wins: &[Win]) -> Result<(), String> {
+            const GAP: f64 = 60.0;
+            let (ax, ay, aw, ah) = self.rect(&wins[0])?;
+            let (bx, by, bw, bh) = self.rect(&wins[1])?;
+            let overlap = |x: f64, y: f64| {
+                x < ax + aw + GAP && ax < x + bw + GAP && y < ay + ah + GAP && ay < y + bh + GAP
+            };
+            if !overlap(bx, by) {
+                return Ok(());
+            }
+            let monitor = unsafe { native::window_monitor(wins[0].handle, 0) };
+            let room = f64::from(unsafe { native::monitor_width(monitor) });
+            let to_x = if ax + aw + GAP + bw <= room {
+                ax + aw + GAP
+            } else {
+                (ax - GAP - bw).max(0.0)
+            };
+            // Held where the first window does not cover the second.
+            let grab = (bx + bw - 12.0, by + bh - 12.0);
+            self.to(grab.0, grab.1)?;
+            self.session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, true))
+                .map_err(fail("NotifyPointerButton"))?;
+            let handle = wins[1].handle;
+            let end = Instant::now() + Duration::from_secs(2);
+            loop {
+                let event = unsafe { native::window_wait(handle, 0.05) };
+                if matches!(event, Event::MouseInput { .. }) {
+                    break;
+                }
+                if Instant::now() >= end {
+                    return Err("the button held on the second window never reached it".into());
+                }
+            }
+            let dragged = unsafe { native::window_drag(handle) };
+            let (dx, dy) = (to_x - bx, ay - by);
+            for step in 1..=10 {
+                let t = f64::from(step) / 10.0;
+                self.to(grab.0 + dx * t, grab.1 + dy * t)?;
+                for w in wins {
+                    unsafe { native::window_wait(w.handle, 0.01) };
+                }
+            }
+            self.session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, false))
+                .map_err(fail("NotifyPointerButton"))?;
+            if !dragged {
+                return Err("dragWindow refused to move the second window".into());
+            }
+            // The drag's own pointer events would misplace the window.
+            std::thread::sleep(Duration::from_millis(300));
+            for w in wins {
+                while unsafe { native::window_poll(w.handle) } != Event::None {}
+            }
+            self.origins.clear();
+            self.find(wins)?;
+            let (bx, by, ..) = self.rect(&wins[1])?;
+            if overlap(bx, by) {
+                return Err(format!("dragWindow left the second window at {bx}, {by}"));
+            }
+            Ok(())
+        }
+
+        fn key_strokes(&self, keys: &[u32]) -> Result<(), String> {
+            for &key in keys {
+                self.session
+                    .call::<_, _, ()>("NotifyKeyboardKeycode", &(key, true))
+                    .map_err(fail("NotifyKeyboardKeycode"))?;
+            }
+            for &key in keys.iter().rev() {
+                self.session
+                    .call::<_, _, ()>("NotifyKeyboardKeycode", &(key, false))
+                    .map_err(fail("NotifyKeyboardKeycode"))?;
+            }
+            Ok(())
+        }
+    }
+
+    impl Input for Mutter {
+        fn name(&self) -> &'static str {
+            "mutter's RemoteDesktop under GNOME"
+        }
+
+        fn focus(&mut self, w: &Win) -> Option<Result<(), String>> {
+            Some(self.point(w, 12.0, 12.0).and_then(|()| self.click()))
+        }
+
+        fn point(&mut self, w: &Win, x: f64, y: f64) -> Result<(), String> {
+            let &(_, ox, oy) = self
+                .origins
+                .iter()
+                .find(|(title, ..)| *title == w.title)
+                .ok_or("an unfound window")?;
+            self.to(ox + x, oy + y)
+        }
+
+        fn nudge(&mut self) -> Result<(), String> {
+            self.session
+                .call::<_, _, ()>("NotifyPointerMotionRelative", &(3.0f64, 2.0f64))
+                .map_err(fail("NotifyPointerMotionRelative"))
+        }
+
+        fn click(&mut self) -> Result<(), String> {
+            self.session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, true))
+                .map_err(fail("NotifyPointerButton"))?;
+            self.session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, false))
+                .map_err(fail("NotifyPointerButton"))
+        }
+
+        /// A negative step scrolls up, as libinput counts.
+        fn scroll_up(&mut self) -> Result<(), String> {
+            self.session
+                .call::<_, _, ()>("NotifyPointerAxisDiscrete", &(0u32, -1i32))
+                .map_err(fail("NotifyPointerAxisDiscrete"))
+        }
+
+        fn key(&mut self, stroke: Stroke) -> Result<(), String> {
+            match stroke {
+                Stroke::A => self.key_strokes(&[KEY_A]),
+                Stroke::ShiftB => self.key_strokes(&[KEY_LEFTSHIFT, KEY_B]),
+                Stroke::Left => self.key_strokes(&[KEY_LEFT]),
+            }
         }
     }
 }

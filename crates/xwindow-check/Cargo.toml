@@ -36,8 +36,10 @@ windows-sys = { version = "0.52", features = [
 ] }
 
 # Wayland maps a window only once it has a frame, which the test draws, and
-# takes input from virtual devices the test holds.
+# takes input from virtual devices the test holds under sway, or from
+# mutter's RemoteDesktop over D-Bus under GNOME.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+zbus = "5"
 softbuffer = { version = "0.4", default-features = false, features = ["wayland", "wayland-dlopen"] }
 wayland-client = "0.31"
 wayland-protocols-misc = { version = "0.3", features = ["client"] }
