@@ -85,8 +85,8 @@ with `install_scoped`):
 - `host::raise`, and in a browser `host::agent`.
 
 The adapter depends on `xwindow-core`. Natively it also depends on `winit`
-0.30 and `raw-window-handle` 0.6. `crates/xwindow-check` is the smallest
-working shape.
+0.30, `raw-window-handle` 0.6 and `window_clipboard` 0.5.
+`crates/xwindow-check` is the smallest working shape.
 
 Per runtime:
 

@@ -74,6 +74,9 @@ struct App {
     next_turn: ControlFlow,
     /// When raw device events come; none are kept under `Never`.
     listen: Listen,
+    /// Connected through an open window's display, which the event loop
+    /// owns, so it outlives the clipboard.
+    clipboard: Option<window_clipboard::Clipboard>,
 }
 
 /// Who drives the loop.
@@ -85,9 +88,11 @@ enum Driver {
     Hosted,
 }
 
+// Fields drop in order: the windows and the clipboard, which use the event
+// loop's display connection, go before the loop.
 struct Loop {
-    driver: Driver,
     app: App,
+    driver: Driver,
 }
 
 thread_local! {
@@ -114,6 +119,7 @@ impl App {
             video_modes: Vec::new(),
             next_turn: ControlFlow::Wait,
             listen: Listen::default(),
+            clipboard: None,
         }
     }
 }
@@ -504,6 +510,18 @@ impl App {
             };
             self.opened.push(made);
         }
+        // Wayland sets a selection only with a recent input serial, which
+        // the clipboard sees only from when it connects.
+        self.clipboard();
+    }
+
+    /// The clipboard, connected through the first window to open.
+    fn clipboard(&mut self) -> Option<&mut window_clipboard::Clipboard> {
+        if self.clipboard.is_none() {
+            let (_, open) = self.windows.iter().next()?;
+            self.clipboard = unsafe { window_clipboard::Clipboard::connect(&open.window) }.ok();
+        }
+        self.clipboard.as_mut()
     }
 
     fn device(&mut self, id: DeviceId) -> i32 {
@@ -1216,6 +1234,35 @@ pub unsafe fn window_listen_device_events(when: i32) {
         _ => Listen::WhenFocused,
     };
     LISTEN.set(Some(listen));
+}
+
+/// Runs `body` on the event loop if there is one, without making it.
+fn made<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
+    LOOP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut slot) => match slot.as_mut() {
+            Some(l) => body(l),
+            None => miss,
+        },
+        Err(_) => miss,
+    })
+}
+
+pub unsafe fn window_clipboard_text() -> OptionalText {
+    made(OptionalText::None, |l| {
+        match l.app.clipboard().map(|clipboard| clipboard.read()) {
+            Some(Ok(text)) => OptionalText::Some { text },
+            _ => OptionalText::None,
+        }
+    })
+}
+
+pub unsafe fn window_set_clipboard_text(text: Text) {
+    let text = text.as_str().to_owned();
+    made((), |l| {
+        if let Some(clipboard) = l.app.clipboard() {
+            let _ = clipboard.write(text);
+        }
+    });
 }
 
 pub unsafe fn window_valid(handle: i32) -> bool {

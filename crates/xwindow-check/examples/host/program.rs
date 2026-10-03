@@ -54,6 +54,8 @@ pub struct Program {
     seen: Vec<&'static str>,
     started: Option<Instant>,
     failures: Vec<String>,
+    /// What the last turn's wait returned, handled first in the next.
+    waited: i32,
 }
 
 impl Program {
@@ -65,6 +67,7 @@ impl Program {
             seen: Vec::new(),
             started: None,
             failures: Vec::new(),
+            waited: 0,
         }
     }
 
@@ -95,11 +98,13 @@ impl Program {
                 self.window.insert(w)
             }
         };
+        let mut next = std::mem::take(&mut self.waited);
         loop {
-            let name = NAMES
-                .get(Window::pollVariant(window) as usize)
-                .copied()
-                .unwrap_or("?");
+            if next == 0 {
+                next = Window::pollVariant(window);
+            }
+            let name = NAMES.get(next as usize).copied().unwrap_or("?");
+            next = 0;
             if name == "None" {
                 break;
             }
@@ -114,7 +119,7 @@ impl Program {
                 self.seen.push(name);
             }
         }
-        let _ = Window::waitVariant(window, PACE);
+        self.waited = Window::waitVariant(window, PACE);
         if self.turns < TURNS {
             return true;
         }

@@ -357,6 +357,13 @@ trait Window {
     /// one of the program's windows has focus.
     #[native(window_listen_device_events)]
     fn listenDeviceEvents(when: Enum<DeviceEvents>);
+    /// The clipboard's text: none when it holds no text, no window is open,
+    /// or the platform has no clipboard to read, as a page cannot.
+    #[native(window_clipboard_text)]
+    fn clipboardText() -> OptionalText;
+    /// Puts text on the clipboard; nothing happens with no window open.
+    #[native(window_set_clipboard_text)]
+    fn setClipboardText(text: Text);
     /// The next event, without waiting. It asks the platform for more only
     /// when the window has none queued and has answered none since the
     /// platform was last asked, so draining with polls asks once.

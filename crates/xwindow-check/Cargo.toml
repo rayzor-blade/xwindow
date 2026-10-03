@@ -21,6 +21,7 @@ xwindow-core = { workspace = true }
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 winit = "0.30"
 raw-window-handle = "0.6"
+window_clipboard = "0.5"
 
 # winit on Android needs an activity: the one the host's Java side starts.
 [target.'cfg(target_os = "android")'.dependencies]

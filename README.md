@@ -81,6 +81,7 @@ The declaration is [`api/window.api.rs`](api/window.api.rs). It covers:
 | Cursor | Icons, RGBA images, visibility, grab, position, hit testing |
 | Input methods | IME allowance, purpose and cursor area |
 | Monitors | Name, size, position, scale, refresh rate, video modes |
+| Clipboard | Plain text, read and written; a page writes only |
 | Activation tokens | Requests, answered by event |
 | Events | All 28 of winit 0.30's window events, its 7 raw device events, and its application lifecycle |
 

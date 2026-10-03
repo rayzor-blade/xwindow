@@ -547,6 +547,20 @@ pub unsafe fn window_listen_device_events(when: i32) {
     page().no_devices = DeviceEvents::from_native(when) == Some(DeviceEvents::Never);
 }
 
+/// A page reads its clipboard only asynchronously, with permission, so there
+/// is nothing to answer at once.
+pub unsafe fn window_clipboard_text() -> OptionalText {
+    OptionalText::None
+}
+
+pub unsafe fn window_set_clipboard_text(text: Text) {
+    let mut p = page();
+    if p.started && p.windows.iter().next().is_some() {
+        p.commands
+            .xw_agent_write_clipboard(AGENT, &text.as_str().to_owned());
+    }
+}
+
 pub unsafe fn window_valid(handle: i32) -> bool {
     page().windows.get(handle).is_some()
 }

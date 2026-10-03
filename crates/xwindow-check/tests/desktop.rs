@@ -140,6 +140,7 @@ impl Desktop {
             "raw device events go to the focused window",
             Self::device_routing,
         );
+        self.check("clipboard", Self::clipboard);
         self.check("cursor icons", Self::cursor_icons);
         self.check("cursor image", Self::cursor_image);
         self.check("cursor position", Self::cursor_position);
@@ -644,6 +645,18 @@ impl Desktop {
             self.absent(other, marks[other], "a Device event", is_device)?;
         }
         Ok(None)
+    }
+
+    /// After the input checks: Wayland takes a selection only from a client
+    /// that has had input.
+    fn clipboard(&mut self) -> Checked {
+        let text = "xwindow clipboard \u{2713} \u{fc}";
+        unsafe { native::window_set_clipboard_text(Text::new(text)) };
+        self.pump(QUIET);
+        match unsafe { native::window_clipboard_text() } {
+            OptionalText::Some { text: got } if got == text => Ok(None),
+            got => Err(format!("set {text:?}, read back {got:?}")),
+        }
     }
 
     fn cursor_icons(&mut self) -> Checked {

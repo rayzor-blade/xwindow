@@ -75,4 +75,5 @@ interface XwAgent {
   undefined focus();
   undefined setImeAllowed(boolean allowed);
   undefined setImeArea(double x, double y, double width, double height);
+  undefined writeClipboard(DOMString text);
 };

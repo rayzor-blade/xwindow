@@ -376,6 +376,8 @@ export function start({ memory, address, canvas }) {
       imeArea = [x, y, w, h];
       placeIme();
     },
+    // A browser writes the clipboard only in answer to the user.
+    writeClipboard: (text) => gate(() => navigator.clipboard?.writeText(text)),
   };
 
   // A redraw the program asked for since the last frame is answered in this
