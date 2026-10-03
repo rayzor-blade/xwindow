@@ -149,6 +149,23 @@ An adapter that runs natively must:
 `cargo run -p xwindow-check --example host -- pump|turns` runs a program
 both ways on a desktop and checks what it saw.
 
+A host in C, such as an app that links HashLink statically on a phone,
+reaches the hook through two symbols every native adapter exports:
+
+```c
+/* Drive::Pump; 0 when attached, -1 when not (always on iOS). */
+int xwindow_attach_pump(void);
+/* Drive::Turns: calls turn(data) each turn until it returns 0. Returns 0
+   when the loop ends, which on iOS it never does, and -1 when it cannot run. */
+int xwindow_run_turns(int (*turn)(void *data), void *data);
+```
+
+On Android the `AndroidApp` comes from `android_main`, which only Rust
+defines. An adapter built for a host in C defines it behind an
+`android-main` feature: it passes the app to `backend::android_app` and
+calls `xwindow_main()`, the host's program entry. With the app kept, a
+program that opens a window without either call gets a pumped loop.
+
 ## Browser boundary
 
 `web.rs` encodes each request onto the generated wire. Requests are batched

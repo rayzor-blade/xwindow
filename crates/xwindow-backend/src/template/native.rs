@@ -119,8 +119,9 @@ fn with<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
             return miss;
         };
         if slot.is_none() {
+            // On Android, with the AndroidApp an adapter's android_main kept.
             #[cfg(not(target_os = "ios"))]
-            match EventLoop::new() {
+            match c_event_loop() {
                 Ok(events) => {
                     *slot = Some(Loop {
                         driver: Driver::Pumped(events),
@@ -128,7 +129,7 @@ fn with<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
                     })
                 }
                 Err(error) => {
-                    host::raise(ErrorKind::Runtime, &format!("window: {error}"));
+                    host::raise(ErrorKind::Runtime, &error);
                     return miss;
                 }
             }
@@ -204,6 +205,82 @@ pub fn attach(events: EventLoop<()>, drive: Drive<'_>) -> Result<(), String> {
             .map_err(|error| format!("window: {error}")),
         None => Ok(()),
     }
+}
+
+// -- the hook for a host in C ---------------------------------------------------
+//
+// A host that links its adapter from C, such as an app that links HashLink
+// statically on a phone, reaches `attach` through these. They report failure
+// by status and on stderr: the program's runtime may not be running yet.
+
+/// The `AndroidApp` the adapter's `android_main` was given, for the loop the
+/// C hook builds.
+#[cfg(target_os = "android")]
+static ANDROID_APP: std::sync::Mutex<Option<winit::platform::android::activity::AndroidApp>> =
+    std::sync::Mutex::new(None);
+
+/// Keeps `app` for the C hook. An adapter that defines `android_main` for a
+/// host in C calls this before it starts the host's program.
+#[cfg(target_os = "android")]
+pub fn android_app(app: winit::platform::android::activity::AndroidApp) {
+    *ANDROID_APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app);
+}
+
+/// An event loop for the backend to make itself, or for the C hook to hand
+/// over: on Android, built with the kept `AndroidApp`.
+fn c_event_loop() -> Result<EventLoop<()>, String> {
+    #[cfg(target_os = "android")]
+    {
+        use winit::platform::android::EventLoopBuilderExtAndroid;
+        let app = ANDROID_APP
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .ok_or("window: no AndroidApp; the adapter's android_main keeps it")?;
+        EventLoop::builder()
+            .with_android_app(app)
+            .build()
+            .map_err(|error| format!("window: {error}"))
+    }
+    #[cfg(not(target_os = "android"))]
+    EventLoop::new().map_err(|error| format!("window: {error}"))
+}
+
+fn c_status(result: Result<(), String>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("{error}");
+            -1
+        }
+    }
+}
+
+/// `attach` with `Drive::Pump`: the program pumps the loop. 0 when attached,
+/// -1 when not; never on iOS, which cannot pump.
+#[unsafe(no_mangle)]
+pub extern "C" fn xwindow_attach_pump() -> i32 {
+    #[cfg(not(target_os = "ios"))]
+    let result = c_event_loop().and_then(|events| attach(events, Drive::Pump));
+    #[cfg(target_os = "ios")]
+    let result = Err("window: iOS cannot pump; run the loop with xwindow_run_turns".to_owned());
+    c_status(result)
+}
+
+/// `attach` with `Drive::Turns`: runs the loop, calling `turn(data)` for each
+/// of the program's turns until it returns 0. Returns 0 when the loop ends,
+/// which on iOS it never does, and -1 when it could not run.
+///
+/// # Safety
+///
+/// `turn` is called with `data` on this thread for as long as the loop runs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xwindow_run_turns(
+    turn: extern "C" fn(*mut std::ffi::c_void) -> i32,
+    data: *mut std::ffi::c_void,
+) -> i32 {
+    let mut turn = || turn(data) != 0;
+    c_status(c_event_loop().and_then(|events| attach(events, Drive::Turns(&mut turn))))
 }
 
 /// The handler a host's loop runs: the backend's, and the program's turns.

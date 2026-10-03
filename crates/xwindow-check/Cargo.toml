@@ -7,6 +7,10 @@ license.workspace = true
 description = "A stand-in adapter that compiles xwindow's generated model and both backends"
 publish = false
 
+[features]
+# Defines android_main for a host in C, which provides xwindow_main.
+android-main = []
+
 [build-dependencies]
 xwindow-backend = { path = "../xwindow-backend" }
 xwindow-bindgen = { path = "../xwindow-bindgen" }

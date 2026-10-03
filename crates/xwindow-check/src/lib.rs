@@ -22,6 +22,19 @@ pub mod backend {
 pub use backend::{Drive, attach};
 #[cfg(not(target_os = "wasi"))]
 pub use winit;
+
+/// For a host in C on Android, as an adapter defines it: winit's activity
+/// calls this, which keeps the app for the backend and starts the host's
+/// program, `xwindow_main`.
+#[cfg(all(target_os = "android", feature = "android-main"))]
+#[unsafe(no_mangle)]
+fn android_main(app: winit::platform::android::activity::AndroidApp) {
+    unsafe extern "C" {
+        fn xwindow_main();
+    }
+    backend::android_app(app);
+    unsafe { xwindow_main() }
+}
 #[cfg(target_os = "wasi")]
 mod web {
     include!(concat!(env!("OUT_DIR"), "/xwindow_backend/web.rs"));
