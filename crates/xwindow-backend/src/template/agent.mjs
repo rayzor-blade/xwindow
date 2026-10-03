@@ -346,6 +346,9 @@ export function start({ memory, address, canvas }) {
     if (!canvas.hidden) measure();
   };
 
+  // The representations a write is gathering.
+  let clipboardItems = [];
+
   // XwAgent, which the program's commands call.
   const agent = {
     setSize: (w, h) => cssSize(w, h, "width", "height"),
@@ -378,6 +381,13 @@ export function start({ memory, address, canvas }) {
     },
     // A browser writes the clipboard only in answer to the user.
     writeClipboard: (text) => gate(() => navigator.clipboard?.writeText(text)),
+    // Copied now, from the program's memory, and written together.
+    clipboardItem: (type, bytes) => clipboardItems.push([type, new Blob([bytes.slice()], { type })]),
+    writeClipboardItems: () => {
+      const items = Object.fromEntries(clipboardItems);
+      clipboardItems = [];
+      gate(() => navigator.clipboard?.write([new ClipboardItem(items)]));
+    },
   };
 
   // A redraw the program asked for since the last frame is answered in this

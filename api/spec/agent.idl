@@ -76,4 +76,6 @@ interface XwAgent {
   undefined setImeAllowed(boolean allowed);
   undefined setImeArea(double x, double y, double width, double height);
   undefined writeClipboard(DOMString text);
+  undefined clipboardItem(DOMString type, Uint8Array bytes);
+  undefined writeClipboardItems();
 };

@@ -17,6 +17,7 @@ pub enum Kind {
     Window = 1,
     Monitor = 2,
     VideoMode = 3,
+    ClipboardItems = 4,
 }
 
 /// Live objects of one kind.

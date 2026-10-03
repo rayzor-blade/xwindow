@@ -4,7 +4,7 @@
 //! root (or beneath a scope), its carriers under `crate::runtime`, the
 //! `xwindow-core` crate, and, for the browser, the generated wire at
 //! `crate::wire`. The native backend needs `winit` 0.30,
-//! `raw-window-handle` 0.6 and `window_clipboard` 0.5. Runtime ABI code
+//! `raw-window-handle` 0.6 and `xwindow-clipboard`. Runtime ABI code
 //! stays in the adapter while every adapter compiles the same window
 //! operations.
 

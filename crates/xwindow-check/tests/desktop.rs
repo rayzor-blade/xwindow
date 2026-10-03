@@ -14,7 +14,8 @@ use xwindow_check::backend as native;
 use xwindow_check::runtime::{Buffer, Text, host};
 use xwindow_check::{
     CursorGrab, CursorIcon, Event, Key, KeyCode, KeyEvent, KeySupplement, Modifiers, MouseButton,
-    MouseElementState, MouseScrollDelta, NamedKey, OptionalText, PhysicalKey, WindowAttributes,
+    MouseElementState, MouseScrollDelta, NamedKey, OptionalBytes, OptionalText, PhysicalKey,
+    WindowAttributes,
 };
 
 /// XWINDOW_DESKTOP=1 opens real windows; unset, the test passes without a
@@ -26,6 +27,15 @@ const TRACE: &str = "XWINDOW_DESKTOP_TRACE";
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const QUIET: Duration = Duration::from_millis(400);
+
+/// A 1x1 orange PNG.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xdf, 0xc0, 0xf0,
+    0x1f, 0x00, 0x06, 0x80, 0x02, 0x7f, 0x10, 0x4c, 0x1b, 0xe1, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 const A: usize = 0;
 const B: usize = 1;
@@ -648,15 +658,55 @@ impl Desktop {
     }
 
     /// After the input checks: Wayland takes a selection only from a client
-    /// that has had input.
+    /// that has had input. Text, then typed data written together.
     fn clipboard(&mut self) -> Checked {
         let text = "xwindow clipboard \u{2713} \u{fc}";
         unsafe { native::window_set_clipboard_text(Text::new(text)) };
         self.pump(QUIET);
         match unsafe { native::window_clipboard_text() } {
-            OptionalText::Some { text: got } if got == text => Ok(None),
-            got => Err(format!("set {text:?}, read back {got:?}")),
+            OptionalText::Some { text: got } if got == text => {}
+            got => return Err(format!("set {text:?}, read back {got:?}")),
         }
+
+        let items: [(&str, &[u8]); 3] = [
+            ("text/plain", "xwindow typed \u{2713}".as_bytes()),
+            ("text/html", b"<b>xwindow</b> typed"),
+            ("image/png", PNG),
+        ];
+        let handle = unsafe { native::clipboard_items_create() };
+        for (mime, bytes) in items {
+            unsafe { native::clipboard_items_add(handle, Text::new(mime), Buffer::new(bytes)) };
+        }
+        if !unsafe { native::clipboard_items_write(handle) } {
+            return Err("the platform refused the typed items".into());
+        }
+        self.pump(QUIET);
+        let types: Vec<String> = (0..unsafe { native::window_clipboard_type_count() })
+            .map(|i| {
+                unsafe { native::window_clipboard_type(i) }
+                    .as_str()
+                    .to_owned()
+            })
+            .collect();
+        for (mime, bytes) in items {
+            if !types.iter().any(|t| t == mime) {
+                return Err(format!(
+                    "{mime} is not among the clipboard's types {types:?}"
+                ));
+            }
+            match unsafe { native::window_clipboard_data(Text::new(mime)) } {
+                OptionalBytes::Some { bytes: got } if got.0 == bytes => {}
+                OptionalBytes::Some { bytes: got } => {
+                    return Err(format!(
+                        "{mime} read back {} bytes, not {}",
+                        got.0.len(),
+                        bytes.len()
+                    ));
+                }
+                OptionalBytes::None => return Err(format!("{mime} read back none")),
+            }
+        }
+        Ok(None)
     }
 
     fn cursor_icons(&mut self) -> Checked {

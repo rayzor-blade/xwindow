@@ -40,8 +40,8 @@ use crate::{
     Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath,
     Ime, ImePurpose, Key, KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers,
     ModifiersKeyState, MouseButton, MouseElementState, MouseScrollDelta, NamedKey, NativeKey,
-    NativeKeyCode, OptionalFloat, OptionalText, PhysicalKey, ResizeDirection, ScaleSizing, Theme,
-    TouchForce, TouchPhase, VariantBytes, WindowAttributes, WindowLevel,
+    NativeKeyCode, OptionalBytes, OptionalFloat, OptionalText, PhysicalKey, ResizeDirection,
+    ScaleSizing, Theme, TouchForce, TouchPhase, VariantBytes, WindowAttributes, WindowLevel,
 };
 
 struct Open {
@@ -76,7 +76,9 @@ struct App {
     listen: Listen,
     /// Connected through an open window's display, which the event loop
     /// owns, so it outlives the clipboard.
-    clipboard: Option<window_clipboard::Clipboard>,
+    clipboard: Option<xwindow_clipboard::Clipboard>,
+    /// The types `clipboardTypeCount` found, which `clipboardType` names.
+    clipboard_types: Vec<String>,
 }
 
 /// Who drives the loop.
@@ -120,6 +122,7 @@ impl App {
             next_turn: ControlFlow::Wait,
             listen: Listen::default(),
             clipboard: None,
+            clipboard_types: Vec::new(),
         }
     }
 }
@@ -516,10 +519,11 @@ impl App {
     }
 
     /// The clipboard, connected through the first window to open.
-    fn clipboard(&mut self) -> Option<&mut window_clipboard::Clipboard> {
+    fn clipboard(&mut self) -> Option<&mut xwindow_clipboard::Clipboard> {
         if self.clipboard.is_none() {
             let (_, open) = self.windows.iter().next()?;
-            self.clipboard = unsafe { window_clipboard::Clipboard::connect(&open.window) }.ok();
+            let display = open.window.display_handle().ok()?.as_raw();
+            self.clipboard = unsafe { xwindow_clipboard::Clipboard::connect(display) }.ok();
         }
         self.clipboard.as_mut()
     }
@@ -1248,21 +1252,83 @@ fn made<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
 }
 
 pub unsafe fn window_clipboard_text() -> OptionalText {
-    made(OptionalText::None, |l| {
-        match l.app.clipboard().map(|clipboard| clipboard.read()) {
-            Some(Ok(text)) => OptionalText::Some { text },
-            _ => OptionalText::None,
+    made(None, |l| {
+        let bytes = l.app.clipboard()?.read(xwindow_clipboard::TEXT)?;
+        String::from_utf8(bytes).ok()
+    })
+    .map_or(OptionalText::None, |text| OptionalText::Some { text })
+}
+
+pub unsafe fn window_set_clipboard_text(text: Text) {
+    let item = (
+        xwindow_clipboard::TEXT.to_owned(),
+        text.as_str().as_bytes().to_vec(),
+    );
+    made((), |l| {
+        if let Some(clipboard) = l.app.clipboard() {
+            clipboard.write(&[item]);
+        }
+    });
+}
+
+pub unsafe fn window_clipboard_type_count() -> i32 {
+    made(0, |l| {
+        let types = l.app.clipboard().map(|c| c.types()).unwrap_or_default();
+        l.app.clipboard_types = types;
+        l.app.clipboard_types.len() as i32
+    })
+}
+
+pub unsafe fn window_clipboard_type(index: i32) -> Text {
+    let name = made(None, |l| {
+        usize::try_from(index)
+            .ok()
+            .and_then(|i| l.app.clipboard_types.get(i).cloned())
+    });
+    Text::new(&name.unwrap_or_default())
+}
+
+pub unsafe fn window_clipboard_data(mime: Text) -> OptionalBytes {
+    let mime = mime.as_str().to_owned();
+    made(None, |l| l.app.clipboard()?.read(&mime)).map_or(OptionalBytes::None, |bytes| {
+        OptionalBytes::Some {
+            bytes: VariantBytes(bytes),
         }
     })
 }
 
-pub unsafe fn window_set_clipboard_text(text: Text) {
-    let text = text.as_str().to_owned();
-    made((), |l| {
-        if let Some(clipboard) = l.app.clipboard() {
-            let _ = clipboard.write(text);
+thread_local! {
+    /// Each `ClipboardItems`' types and bytes, until it is written.
+    static ITEMS: RefCell<Slab<Vec<(String, Vec<u8>)>>> =
+        const { RefCell::new(Slab::new(Kind::ClipboardItems)) };
+}
+
+pub unsafe fn clipboard_items_create() -> i32 {
+    ITEMS.with(|items| items.borrow_mut().put(Vec::new()))
+}
+
+#[allow(unused_unsafe)]
+pub unsafe fn clipboard_items_add(handle: i32, mime: Text, bytes: Buffer) {
+    let item = (
+        mime.as_str().to_owned(),
+        unsafe { bytes.as_slice() }.to_vec(),
+    );
+    ITEMS.with(|items| {
+        if let Some(list) = items.borrow_mut().get_mut(handle) {
+            list.push(item);
         }
     });
+}
+
+pub unsafe fn clipboard_items_write(handle: i32) -> bool {
+    let Some(list) = ITEMS.with(|items| items.borrow_mut().remove(handle)) else {
+        return false;
+    };
+    made(false, |l| {
+        l.app
+            .clipboard()
+            .is_some_and(|clipboard| clipboard.write(&list))
+    })
 }
 
 pub unsafe fn window_valid(handle: i32) -> bool {

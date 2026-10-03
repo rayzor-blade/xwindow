@@ -103,6 +103,12 @@ enum OptionalText {
     Some { text: Text },
 }
 
+/// Bytes, or none, which is not the same as empty.
+enum OptionalBytes {
+    None,
+    Some { bytes: Buffer },
+}
+
 enum OptionalFloat {
     None,
     Some { value: f64 },
@@ -364,6 +370,17 @@ trait Window {
     /// Puts text on the clipboard; nothing happens with no window open.
     #[native(window_set_clipboard_text)]
     fn setClipboardText(text: Text);
+    /// How many types the clipboard holds now; `clipboardType` names each,
+    /// best first, as a MIME type. `text/plain` is UTF-8 text and
+    /// `text/uri-list` a list of files.
+    #[native(window_clipboard_type_count)]
+    fn clipboardTypeCount() -> i32;
+    #[native(window_clipboard_type)]
+    fn clipboardType(index: i32) -> Text;
+    /// The clipboard's bytes for a MIME type, or none when it does not hold
+    /// it, no window is open, or the platform cannot read it.
+    #[native(window_clipboard_data)]
+    fn clipboardData(mimeType: Text) -> OptionalBytes;
     /// The next event, without waiting. It asks the platform for more only
     /// when the window has none queued and has answered none since the
     /// platform was last asked, so draining with polls asks once.
@@ -527,6 +544,20 @@ trait Window {
     fn monitorCount(this: &Window) -> i32;
     #[native(window_monitor)]
     fn monitor(this: &Window, index: i32) -> Box<Monitor>;
+}
+
+/// Representations of one thing, by MIME type, which `write` puts on the
+/// clipboard together so that a reader takes the richest it understands:
+/// `text/plain` beside `text/html`, or `image/png` beside `text/plain`.
+trait ClipboardItems {
+    #[native(clipboard_items_create)]
+    fn create() -> Box<ClipboardItems>;
+    #[native(clipboard_items_add)]
+    fn add(this: &ClipboardItems, mimeType: Text, bytes: Buffer);
+    /// Replaces the clipboard's contents with the items; whether the
+    /// platform took them. The handle names nothing after.
+    #[native(clipboard_items_write)]
+    fn write(this: &ClipboardItems) -> bool;
 }
 
 /// A display. The same display is the same handle.

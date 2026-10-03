@@ -1,0 +1,30 @@
+[package]
+name = "xwindow-clipboard"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The system clipboard's typed data, for xwindow's native backend"
+
+[dependencies]
+raw-window-handle = "0.6"
+
+# Each platform through crates winit already links, at its versions, so the
+# clipboard adds little to an adapter's library.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSArray", "NSData", "NSEnumerator", "NSString"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-uniform-type-identifiers = { version = "0.2.2", features = ["UTType"] }
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+# X11: its own connection, and a thread that serves the selection it owns.
+x11rb = "0.13"
+# Wayland: a data device on the window's own connection, on its own queue.
+smithay-client-toolkit = { version = "0.19", default-features = false, features = ["calloop"] }
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+calloop = "0.13"
+rustix = { version = "0.38", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+clipboard-win = "5.4"

@@ -21,8 +21,8 @@ use crate::wire::{self, Handle, Mailbox, Queue};
 use crate::{
     CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath, Ime, Key,
     KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
-    MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalText,
-    PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, WindowAttributes,
+    MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalBytes,
+    OptionalText, PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, WindowAttributes,
 };
 
 /// The name a host starts the agent by: it imports `xwindow.mjs` beside the
@@ -80,6 +80,8 @@ struct Page {
     screen: (i32, i32, String),
     /// The program asked for no device events.
     no_devices: bool,
+    /// Each `ClipboardItems`' types and bytes, until it is written.
+    clipboard_items: Slab<Vec<(String, Box<[u8]>)>>,
 }
 
 static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
@@ -103,6 +105,7 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         cursor_visible: true,
         screen: (0, 0, String::new()),
         no_devices: false,
+        clipboard_items: Slab::new(Kind::ClipboardItems),
     })
 });
 
@@ -551,6 +554,56 @@ pub unsafe fn window_listen_device_events(when: i32) {
 /// is nothing to answer at once.
 pub unsafe fn window_clipboard_text() -> OptionalText {
     OptionalText::None
+}
+
+pub unsafe fn window_clipboard_type_count() -> i32 {
+    0
+}
+
+pub unsafe fn window_clipboard_type(_: i32) -> Text {
+    Text::new("")
+}
+
+pub unsafe fn window_clipboard_data(_: Text) -> OptionalBytes {
+    OptionalBytes::None
+}
+
+pub unsafe fn clipboard_items_create() -> i32 {
+    page().clipboard_items.put(Vec::new())
+}
+
+#[allow(unused_unsafe)]
+pub unsafe fn clipboard_items_add(handle: i32, mime: Text, bytes: Buffer) {
+    let item = (
+        mime.as_str().to_owned(),
+        Box::<[u8]>::from(unsafe { bytes.as_slice() }),
+    );
+    if let Some(list) = page().clipboard_items.get_mut(handle) {
+        list.push(item);
+    }
+}
+
+/// Sent at once, gated on the user's activation: the agent copies the bytes
+/// while it runs the commands.
+pub unsafe fn clipboard_items_write(handle: i32) -> bool {
+    let mut p = page();
+    let Some(list) = p.clipboard_items.remove(handle) else {
+        return false;
+    };
+    if !p.started || p.windows.iter().next().is_none() || list.is_empty() {
+        return false;
+    }
+    for (mime, bytes) in list {
+        let data = wire::Bytes {
+            address: bytes.as_ptr() as usize as u32,
+            len: bytes.len() as u32,
+        };
+        p.staged.push(bytes);
+        p.commands.xw_agent_clipboard_item(AGENT, &mime, &data);
+    }
+    p.commands.xw_agent_write_clipboard_items(AGENT);
+    p.flush();
+    true
 }
 
 pub unsafe fn window_set_clipboard_text(text: Text) {
