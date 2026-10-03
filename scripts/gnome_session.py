@@ -79,7 +79,8 @@ def call(bus, obj, iface, method, args, reply):
 
 def record(bus, folder):
     """Records the virtual monitor through ScreenCast and PipeWire: a PNG per
-    frame into `folder`, the last resent twice a second while nothing changes."""
+    frame into `folder`, the last resent twice a second while nothing changes.
+    Only the latest few frames are kept, however fast the monitor changes."""
     (session,) = call(bus, "/org/gnome/Mutter/ScreenCast", "org.gnome.Mutter.ScreenCast",
                       "CreateSession", GLib.Variant("(a{sv})", ({},)), "(o)")
     (stream,) = call(bus, session, "org.gnome.Mutter.ScreenCast.Session", "RecordMonitor",
@@ -102,16 +103,21 @@ def record(bus, folder):
     os.makedirs(folder, exist_ok=True)
     return subprocess.Popen(["gst-launch-1.0", "-q", "pipewiresrc", f"target-object={node[0]}",
                              "keepalive-time=500", "!", "videoconvert", "!", "pngenc",
-                             "snapshot=false", "!", "multifilesink",
+                             "snapshot=false", "!", "multifilesink", "max-files=8",
                              f"location={folder}/frame-%05d.png"],
                             stdout=subprocess.DEVNULL, start_new_session=True)
 
 
-def frame_at(folder, moment):
-    """The newest recorded frame written by `moment`."""
-    frames = [(os.path.getmtime(f), f) for f in glob.glob(f"{folder}/frame-*.png")]
-    before = [f for f in frames if f[0] <= moment]
-    return max(before)[1] if before else None
+def frame_now(folder):
+    """The newest recorded frame that has finished being written."""
+    frames = []
+    for name in glob.glob(f"{folder}/frame-*.png"):
+        try:
+            frames.append((os.path.getmtime(name), name))
+        except OSError:
+            pass  # dropped as newer frames came
+    done = [f for f in frames if f[0] <= time.time() - 0.05]
+    return max(done)[1] if done else None
 
 
 def start(x11):
@@ -226,13 +232,12 @@ def main():
         started = time.time()
         for when, path in shots:
             time.sleep(max(0.0, started + when - time.time()))
-            # Let a frame written at the moment land.
-            time.sleep(0.6)
-            frame = frame_at(folder, started + when)
-            if frame:
+            # Copied at its moment: the recorder keeps only the latest frames.
+            frame = frame_now(folder)
+            try:
                 shutil.copy(frame, path)
                 print(f"gnome: screenshot at {when:g}s {path}", flush=True)
-            else:
+            except (OSError, TypeError):
                 print(f"gnome: no frame by {when:g}s", flush=True)
         try:
             return program.wait(timeout=600)
