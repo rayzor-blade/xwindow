@@ -42,6 +42,13 @@ enum ImePurpose {
     Terminal,
 }
 
+/// When the platform delivers raw device events (`Event.Device`).
+enum DeviceEvents {
+    Always,
+    WhenFocused,
+    Never,
+}
+
 enum CursorGrab {
     None,
     Confined,
@@ -346,7 +353,13 @@ trait Window {
     fn open(attributes: &WindowAttributes) -> Box<Window>;
     #[native(window_valid)]
     fn valid(this: &Window) -> bool;
-    /// The next event, without waiting.
+    /// When raw device events come, for every window: by default only while
+    /// one of the program's windows has focus.
+    #[native(window_listen_device_events)]
+    fn listenDeviceEvents(when: Enum<DeviceEvents>);
+    /// The next event, without waiting. It asks the platform for more only
+    /// when the window has none queued and has answered none since the
+    /// platform was last asked, so draining with polls asks once.
     #[native(window_poll)]
     fn poll(this: &Window) -> Event;
     /// The next event, waiting up to `timeout` seconds for one; a negative

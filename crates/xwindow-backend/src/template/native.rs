@@ -25,7 +25,9 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{self as native, DeviceId, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, AsyncRequestSerial, ControlFlow, EventLoop};
+use winit::event_loop::{
+    ActiveEventLoop, AsyncRequestSerial, ControlFlow, DeviceEvents as Listen, EventLoop,
+};
 use winit::keyboard as keys;
 use winit::monitor::{MonitorHandle, VideoModeHandle};
 #[cfg(not(target_os = "ios"))]
@@ -35,11 +37,11 @@ use xwindow_core::{Kind, Slab};
 
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::{
-    Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, ImePurpose,
-    Key, KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
-    MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalFloat,
-    OptionalText, PhysicalKey, ResizeDirection, ScaleSizing, Theme, TouchForce, TouchPhase,
-    VariantBytes, WindowAttributes, WindowLevel,
+    Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath,
+    Ime, ImePurpose, Key, KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers,
+    ModifiersKeyState, MouseButton, MouseElementState, MouseScrollDelta, NamedKey, NativeKey,
+    NativeKeyCode, OptionalFloat, OptionalText, PhysicalKey, ResizeDirection, ScaleSizing, Theme,
+    TouchForce, TouchPhase, VariantBytes, WindowAttributes, WindowLevel,
 };
 
 struct Open {
@@ -48,6 +50,9 @@ struct Open {
     sizing: ScaleSizing,
     /// What the program set: winit reads no title back on X11 and others.
     title: String,
+    /// The platform was asked for events since this window last answered a
+    /// poll or wait with none.
+    pumped: bool,
 }
 
 struct App {
@@ -67,6 +72,8 @@ struct App {
     video_modes: Vec<VideoModeHandle>,
     /// Under a host, when the program asked for its next turn.
     next_turn: ControlFlow,
+    /// When raw device events come; none are kept under `Never`.
+    listen: Listen,
 }
 
 /// Who drives the loop.
@@ -87,6 +94,8 @@ thread_local! {
     static LOOP: RefCell<Option<Loop>> = const { RefCell::new(None) };
     /// The running loop, while the host gives the program a turn.
     static ACTIVE: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
+    /// When device events should come, until the loop next runs and takes it.
+    static LISTEN: Cell<Option<Listen>> = const { Cell::new(None) };
 }
 
 impl App {
@@ -104,6 +113,7 @@ impl App {
             monitors: Vec::new(),
             video_modes: Vec::new(),
             next_turn: ControlFlow::Wait,
+            listen: Listen::default(),
         }
     }
 }
@@ -309,7 +319,13 @@ impl Host<'_> {
 
 impl ApplicationHandler for Host<'_> {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: native::StartCause) {
-        self.app(|app| app.new_events(event_loop, cause));
+        self.app(|app| {
+            if let Some(listen) = LISTEN.take() {
+                event_loop.listen_device_events(listen);
+                app.listen = listen;
+            }
+            app.new_events(event_loop, cause)
+        });
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -392,7 +408,14 @@ impl Loop {
         match &mut self.driver {
             #[cfg(not(target_os = "ios"))]
             Driver::Pumped(events) => {
+                if let Some(listen) = LISTEN.take() {
+                    events.listen_device_events(listen);
+                    self.app.listen = listen;
+                }
                 events.pump_app_events(timeout, &mut self.app);
+                for (_, open) in self.app.windows.iter_mut() {
+                    open.pumped = true;
+                }
             }
             Driver::Hosted => {
                 let _ = timeout;
@@ -407,8 +430,16 @@ impl Loop {
     /// The next event `handle` has, pumping once when it has none, and
     /// waiting until `deadline` for one when there is a deadline. Under a
     /// host, it asks for the next turn instead.
+    ///
+    /// A poll pumps only if this window has answered none since the last
+    /// pump: a pump can take a display frame, and a program draining its
+    /// events with polls would otherwise pump for as long as input lasts.
     fn next(&mut self, handle: i32, deadline: Option<Option<Instant>>) -> Event {
-        if self.app.windows.get(handle).is_none() {
+        let Some(open) = self.app.windows.get_mut(handle) else {
+            return Event::None;
+        };
+        if deadline.is_none() && open.events.is_empty() && open.pumped {
+            open.pumped = false;
             return Event::None;
         }
         loop {
@@ -440,12 +471,13 @@ impl Loop {
                 Some(Some(deadline)) => Instant::now() >= deadline,
             };
             if waited_out || self.app.windows.get(handle).is_none() {
-                return self
-                    .app
-                    .windows
-                    .get_mut(handle)
-                    .and_then(|open| open.events.pop_front())
-                    .unwrap_or_default();
+                let Some(open) = self.app.windows.get_mut(handle) else {
+                    return Event::None;
+                };
+                return open.events.pop_front().unwrap_or_else(|| {
+                    open.pumped = false;
+                    Event::None
+                });
             }
         }
     }
@@ -463,6 +495,7 @@ impl App {
                         events: VecDeque::new(),
                         sizing,
                         title,
+                        pumped: false,
                     });
                     self.ids.insert(id, handle);
                     Ok(handle)
@@ -581,6 +614,9 @@ impl ApplicationHandler for App {
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, id: DeviceId, event: native::DeviceEvent) {
+        if self.listen == Listen::Never {
+            return;
+        }
         let event = Event::Device {
             device_id: self.device(id),
             event: device_event(event),
@@ -1170,6 +1206,16 @@ pub unsafe fn window_open(a: &WindowAttributes) -> i32 {
             }
         }
     })
+}
+
+/// Taken when the loop next runs, so it never makes the loop itself.
+pub unsafe fn window_listen_device_events(when: i32) {
+    let listen = match DeviceEvents::from_native(when) {
+        Some(DeviceEvents::Always) => Listen::Always,
+        Some(DeviceEvents::Never) => Listen::Never,
+        _ => Listen::WhenFocused,
+    };
+    LISTEN.set(Some(listen));
 }
 
 pub unsafe fn window_valid(handle: i32) -> bool {

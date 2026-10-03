@@ -19,10 +19,10 @@ use xwindow_core::{Kind, Slab};
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::wire::{self, Handle, Mailbox, Queue};
 use crate::{
-    CursorGrab, CursorIcon, CursorRange, DeviceEvent, Event, FilePath, Ime, Key, KeyCode, KeyEvent,
-    KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton, MouseElementState,
-    MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalText, PhysicalKey, ScaleSizing,
-    Theme, TouchForce, TouchPhase, WindowAttributes,
+    CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath, Ime, Key,
+    KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers, ModifiersKeyState, MouseButton,
+    MouseElementState, MouseScrollDelta, NamedKey, NativeKey, NativeKeyCode, OptionalText,
+    PhysicalKey, ScaleSizing, Theme, TouchForce, TouchPhase, WindowAttributes,
 };
 
 /// The name a host starts the agent by: it imports `xwindow.mjs` beside the
@@ -78,6 +78,8 @@ struct Page {
     cursor: String,
     cursor_visible: bool,
     screen: (i32, i32, String),
+    /// The program asked for no device events.
+    no_devices: bool,
 }
 
 static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
@@ -100,6 +102,7 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         cursor: "default".to_owned(),
         cursor_visible: true,
         screen: (0, 0, String::new()),
+        no_devices: false,
     })
 });
 
@@ -348,6 +351,7 @@ impl Page {
                 pressure: e.pressure.unwrap_or(0.0),
                 stage: i64::from(e.stage.unwrap_or(0)),
             },
+            K::MouseMotion if self.no_devices => return None,
             K::MouseMotion => Event::Device {
                 device_id,
                 event: DeviceEvent::MouseMotion { x, y },
@@ -535,6 +539,12 @@ pub unsafe fn window_open(a: &WindowAttributes) -> i32 {
         BLOCK.queue.wait(seen, 100_000_000);
     }
     handle
+}
+
+/// A page's device events are its pointer lock's motion; the rest are the
+/// same as focus allows.
+pub unsafe fn window_listen_device_events(when: i32) {
+    page().no_devices = DeviceEvents::from_native(when) == Some(DeviceEvents::Never);
 }
 
 pub unsafe fn window_valid(handle: i32) -> bool {
