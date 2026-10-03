@@ -151,6 +151,7 @@ impl Desktop {
             Self::device_routing,
         );
         self.check("clipboard", Self::clipboard);
+        self.check("redraws paced by presented frames", Self::paced_redraws);
         self.check("cursor icons", Self::cursor_icons);
         self.check("cursor image", Self::cursor_image);
         self.check("cursor position", Self::cursor_position);
@@ -705,6 +706,29 @@ impl Desktop {
                 }
                 OptionalBytes::None => return Err(format!("{mime} read back none")),
             }
+        }
+        Ok(None)
+    }
+
+    /// Each RedrawRequested after a frame presented behind prePresentNotify:
+    /// on Wayland it waits for that frame's callback, and must still come.
+    fn paced_redraws(&mut self) -> Checked {
+        let h = self.handle(A);
+        for _ in 0..3 {
+            let marks = self.marks();
+            unsafe { native::window_pre_present_notify(h) };
+            let (width, height) = unsafe { (native::window_width(h), native::window_height(h)) };
+            let color = self.wins[A].color;
+            if let Some(frame) = self.wins[A].frame.as_mut() {
+                frame.draw(width as u32, height as u32, color)?;
+            }
+            unsafe { native::window_request_redraw(h) };
+            self.expect(
+                A,
+                marks[A],
+                "RedrawRequested after a presented frame",
+                |e| matches!(e, Event::RedrawRequested),
+            )?;
         }
         Ok(None)
     }

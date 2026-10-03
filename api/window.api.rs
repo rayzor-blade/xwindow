@@ -500,6 +500,12 @@ trait Window {
     fn showWindowMenu(this: &Window, x: f64, y: f64);
     #[native(window_request_redraw)]
     fn requestRedraw(this: &Window);
+    /// Call just before presenting a frame. On Wayland the next
+    /// `RedrawRequested` then waits for the compositor's frame callback for
+    /// that frame, which paces drawing to the display; elsewhere it does
+    /// nothing.
+    #[native(window_pre_present_notify)]
+    fn prePresentNotify(this: &Window);
     #[native(window_focus)]
     fn focus(this: &Window);
     #[native(window_request_attention)]

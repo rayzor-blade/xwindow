@@ -1622,6 +1622,10 @@ pub unsafe fn window_request_redraw(handle: i32) {
     window(handle, (), |w| w.request_redraw());
 }
 
+pub unsafe fn window_pre_present_notify(handle: i32) {
+    window(handle, (), |w| w.pre_present_notify());
+}
+
 pub unsafe fn window_focus(handle: i32) {
     window(handle, (), |w| w.focus_window());
 }

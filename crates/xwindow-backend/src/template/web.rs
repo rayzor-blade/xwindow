@@ -822,6 +822,9 @@ pub unsafe fn window_request_redraw(handle: i32) {
     with(handle, (), |_| BLOCK.redraw.store(1, SeqCst));
 }
 
+/// The agent already answers a redraw at the page's next animation frame.
+pub unsafe fn window_pre_present_notify(_: i32) {}
+
 pub unsafe fn window_focus(handle: i32) {
     with(handle, (), |p| p.commands.xw_agent_focus(AGENT));
 }
