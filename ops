@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":4,"timestamp":1790995929,"nonce":"nhpHOwUui1MO+cMxcjSjl1rG4RI=","status":2}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1790996017,"nonce":"/nkfIB66t1UmNaQM9aSS7HCuLH0=","message":"hlwindow d4ed7ec52ce037aa64b1c2f61714ecc9633e9a05 moves to it: Window.listenDeviceEvents(when:DeviceEvents) in the Haxe surface. xwindow CI run 37091078360 and hlwindow's CI pass.","files":null}]}
