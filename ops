@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1791143852,"nonce":"6C+M2nqDWM7+vj0ddxe/hSEFgHo=","added":["bug","area:backend"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1791143984,"nonce":"G7RlrKnWEJTYjvrSvLObSFFo5Gk=","message":"Fixed in db815b6794eaab27ff0ef654a6a4450b5974fd6b. hlwindow gpu_test native: 433 frames. wgpu bench: 442 paced, 452 polling only.","files":null}]}
