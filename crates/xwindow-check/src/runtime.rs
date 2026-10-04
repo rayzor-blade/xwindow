@@ -16,9 +16,16 @@ pub mod host {
 
     thread_local! {
         static RAISED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        static BLOCKING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Marks this thread as in a blocking call, where it may not raise.
+    pub fn blocking(yes: bool) {
+        BLOCKING.set(yes);
     }
 
     pub fn raise(kind: ErrorKind, message: &str) {
+        assert!(!BLOCKING.get(), "raised while blocking: {message}");
         eprintln!("{kind:?}: {message}");
         RAISED.with(|r| r.borrow_mut().push(format!("{kind:?}: {message}")));
     }

@@ -441,7 +441,13 @@ impl Loop {
                 };
                 #[cfg(target_os = "macos")]
                 let timeout = timeout.filter(|timeout| timeout.is_zero());
-                events.pump_app_events(timeout, &mut self.app);
+                // The pump only queues events in Rust's memory and calls
+                // nothing in the program, so the runtime may collect while
+                // it waits.
+                {
+                    let _blocking = Blocking::new();
+                    events.pump_app_events(timeout, &mut self.app);
+                }
                 for (_, open) in self.app.windows.iter_mut() {
                     open.pumped = true;
                 }
@@ -1593,6 +1599,22 @@ pub unsafe fn window_set_transparent(handle: i32, yes: bool) {
 
 pub unsafe fn window_set_blur(handle: i32, yes: bool) {
     window(handle, (), |w| w.set_blur(yes));
+}
+
+/// Tells the runtime this thread is outside its heap until dropped.
+struct Blocking;
+
+impl Blocking {
+    fn new() -> Self {
+        host::blocking(true);
+        Blocking
+    }
+}
+
+impl Drop for Blocking {
+    fn drop(&mut self) {
+        host::blocking(false);
+    }
 }
 
 /// What the macOS pump needs from AppKit and CoreFoundation beyond winit.

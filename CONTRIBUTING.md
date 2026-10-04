@@ -82,7 +82,12 @@ with `install_scoped`):
 `crate::runtime` must provide:
 
 - `Text`, `Buffer` (with `new`, `NULL`, `len` and `as_ptr`) and `ErrorKind`;
-- `host::raise`, and in a browser `host::agent`.
+- `host::raise`, and in a browser `host::agent`;
+- natively, `host::blocking(bool)`. The backend calls it with true before
+  it pumps the platform and with false after, so a runtime with a
+  collector can collect while the thread waits. Nothing between the two
+  touches the runtime's heap or calls the program. HashLink's is
+  `hl_blocking`.
 
 The adapter depends on `xwindow-core`. Natively it also depends on `winit`
 0.30, `raw-window-handle` 0.6 and `xwindow-clipboard`, which reaches each
