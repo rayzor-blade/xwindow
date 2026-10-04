@@ -53,6 +53,9 @@ struct Open {
     /// The platform was asked for events since this window last answered a
     /// poll or wait with none.
     pumped: bool,
+    /// The program asked for a redraw that has not come yet, on platforms
+    /// where xwindow delivers it rather than winit.
+    redraw: bool,
 }
 
 struct App {
@@ -421,6 +424,22 @@ impl Loop {
                     events.listen_device_events(listen);
                     self.app.listen = listen;
                 }
+                // A pump on macOS ends when AppKit dequeues the event winit
+                // posts to stop it, and AppKit can miss one posted while the
+                // run loop sleeps until the next display frame. So a poll
+                // stops behind the events already queued instead, and a wait
+                // wakes on a one-shot timer rather than winit's polling one.
+                #[cfg(target_os = "macos")]
+                let _alarm = match timeout {
+                    Some(timeout) if timeout.is_zero() => {
+                        appkit::stop_after_queued();
+                        None
+                    }
+                    Some(timeout) => Some(appkit::Alarm::after(timeout)),
+                    None => None,
+                };
+                #[cfg(target_os = "macos")]
+                let timeout = timeout.filter(|timeout| timeout.is_zero());
                 events.pump_app_events(timeout, &mut self.app);
                 for (_, open) in self.app.windows.iter_mut() {
                     open.pumped = true;
@@ -447,18 +466,18 @@ impl Loop {
         let Some(open) = self.app.windows.get_mut(handle) else {
             return Event::None;
         };
-        if deadline.is_none() && open.events.is_empty() && open.pumped {
+        if deadline.is_none() && open.events.is_empty() && !open.redraw && open.pumped {
             open.pumped = false;
             return Event::None;
         }
         loop {
-            if let Some(event) = self
-                .app
-                .windows
-                .get_mut(handle)
-                .and_then(|open| open.events.pop_front())
-            {
-                return event;
+            if let Some(open) = self.app.windows.get_mut(handle) {
+                if let Some(event) = open.events.pop_front() {
+                    return event;
+                }
+                if std::mem::take(&mut open.redraw) {
+                    return Event::RedrawRequested;
+                }
             }
             if self.hosted() {
                 self.app.next_turn = match deadline {
@@ -505,6 +524,7 @@ impl App {
                         sizing,
                         title,
                         pumped: false,
+                        redraw: false,
                     });
                     self.ids.insert(id, handle);
                     Ok(handle)
@@ -1229,7 +1249,13 @@ pub unsafe fn window_open(a: &WindowAttributes) -> i32 {
             while l.app.opened.is_empty() && passes < 16 && Instant::now() < deadline {
                 if l.app.resumed {
                     passes += 1;
-                    l.pump(Some(Duration::ZERO));
+                    // A poll on macOS handles only what is queued, short of
+                    // the pass of winit's loop that makes the window.
+                    l.pump(Some(if cfg!(target_os = "macos") {
+                        Duration::from_millis(1)
+                    } else {
+                        Duration::ZERO
+                    }));
                 } else {
                     l.pump(Some(Duration::from_millis(50)));
                 }
@@ -1568,6 +1594,214 @@ pub unsafe fn window_set_blur(handle: i32, yes: bool) {
     window(handle, (), |w| w.set_blur(yes));
 }
 
+/// What the macOS pump needs from AppKit and CoreFoundation beyond winit.
+#[cfg(target_os = "macos")]
+mod appkit {
+    use std::cell::Cell;
+    use std::ffi::{c_char, c_void};
+    use std::time::Duration;
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn objc_msgSend();
+    }
+
+    #[link(name = "System")]
+    unsafe extern "C" {
+        static _NSConcreteGlobalBlock: [usize; 0];
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        static kCFRunLoopCommonModes: *const c_void;
+        fn CFAbsoluteTimeGetCurrent() -> f64;
+        fn CFRunLoopGetMain() -> *mut c_void;
+        fn CFRunLoopTimerCreate(
+            allocator: *const c_void,
+            fire: f64,
+            interval: f64,
+            flags: usize,
+            order: isize,
+            callout: extern "C" fn(*mut c_void, *mut c_void),
+            context: *mut c_void,
+        ) -> *mut c_void;
+        fn CFRunLoopAddTimer(run_loop: *mut c_void, timer: *mut c_void, mode: *const c_void);
+        fn CFRunLoopTimerInvalidate(timer: *mut c_void);
+        fn CFRelease(object: *mut c_void);
+    }
+
+    /// `objc_msgSend`, typed as the method it sends.
+    unsafe fn send<F: Copy>() -> F {
+        let send: unsafe extern "C" fn() = objc_msgSend;
+        unsafe { std::mem::transmute_copy(&send) }
+    }
+
+    unsafe fn class(name: &std::ffi::CStr) -> Id {
+        unsafe { objc_getClass(name.as_ptr()) }
+    }
+
+    unsafe fn sel(name: &std::ffi::CStr) -> Sel {
+        unsafe { sel_registerName(name.as_ptr()) }
+    }
+
+    /// A one-shot timer on the main run loop, which does nothing but wake it.
+    pub struct Alarm(*mut c_void);
+
+    impl Alarm {
+        pub fn after(timeout: Duration) -> Self {
+            extern "C" fn wake(_: *mut c_void, _: *mut c_void) {}
+            unsafe {
+                let fire = CFAbsoluteTimeGetCurrent() + timeout.as_secs_f64();
+                let timer = CFRunLoopTimerCreate(
+                    std::ptr::null(),
+                    fire,
+                    0.0,
+                    0,
+                    0,
+                    wake,
+                    std::ptr::null_mut(),
+                );
+                CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
+                Alarm(timer)
+            }
+        }
+    }
+
+    impl Drop for Alarm {
+        fn drop(&mut self) {
+            unsafe {
+                CFRunLoopTimerInvalidate(self.0);
+                CFRelease(self.0);
+            }
+        }
+    }
+
+    const APPLICATION_DEFINED: u64 = 15;
+    /// The subtype marking xwindow's stop events among application-defined ones.
+    const STOP: i16 = 0x7877;
+
+    thread_local! {
+        /// The last stop posted; an earlier one still queued stops nothing.
+        static POSTED: Cell<isize> = const { Cell::new(0) };
+        static WATCHING: Cell<bool> = const { Cell::new(false) };
+    }
+
+    #[repr(C)]
+    struct Descriptor {
+        reserved: usize,
+        size: usize,
+    }
+
+    #[repr(C)]
+    struct Block {
+        isa: *const c_void,
+        flags: i32,
+        reserved: i32,
+        invoke: unsafe extern "C" fn(*mut Block, Id) -> Id,
+        descriptor: *const Descriptor,
+    }
+
+    static DESCRIPTOR: Descriptor = Descriptor {
+        reserved: 0,
+        size: std::mem::size_of::<Block>(),
+    };
+
+    /// Makes the next run of the application return once it has handled
+    /// the events already queued, by posting a stop event behind them that
+    /// a local event monitor acts on. Before the application has finished
+    /// launching, winit's launch stops it instead.
+    pub fn stop_after_queued() {
+        unsafe {
+            let running: Id = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                class(c"NSRunningApplication"),
+                sel(c"currentApplication"),
+            );
+            let launched = send::<unsafe extern "C" fn(Id, Sel) -> bool>()(
+                running,
+                sel(c"isFinishedLaunching"),
+            );
+            if !launched {
+                return;
+            }
+            if !WATCHING.replace(true) {
+                // A global block: it captures nothing and is never freed.
+                let block = Box::leak(Box::new(Block {
+                    isa: _NSConcreteGlobalBlock.as_ptr().cast(),
+                    flags: 1 << 28,
+                    reserved: 0,
+                    invoke: seen,
+                    descriptor: &DESCRIPTOR,
+                }));
+                send::<unsafe extern "C" fn(Id, Sel, u64, *mut Block) -> Id>()(
+                    class(c"NSEvent"),
+                    sel(c"addLocalMonitorForEventsMatchingMask:handler:"),
+                    1 << APPLICATION_DEFINED,
+                    block,
+                );
+            }
+            let posted = POSTED.get() + 1;
+            POSTED.set(posted);
+            #[repr(C)]
+            struct Point(f64, f64);
+            let event = send::<
+                unsafe extern "C" fn(Id, Sel, u64, Point, u64, f64, isize, Id, i16, isize, isize) -> Id,
+            >()(
+                class(c"NSEvent"),
+                sel(c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
+                APPLICATION_DEFINED,
+                Point(0.0, 0.0),
+                0,
+                0.0,
+                0,
+                std::ptr::null_mut(),
+                STOP,
+                posted,
+                0,
+            );
+            send::<unsafe extern "C" fn(Id, Sel, Id, bool)>()(
+                application(),
+                sel(c"postEvent:atStart:"),
+                event,
+                false,
+            );
+        }
+    }
+
+    unsafe fn application() -> Id {
+        unsafe {
+            send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                class(c"NSApplication"),
+                sel(c"sharedApplication"),
+            )
+        }
+    }
+
+    /// The monitor: it stops the application on the last stop event posted
+    /// and drops every stop event, leaving other events alone.
+    unsafe extern "C" fn seen(_: *mut Block, event: Id) -> Id {
+        unsafe {
+            let subtype = send::<unsafe extern "C" fn(Id, Sel) -> i16>()(event, sel(c"subtype"));
+            if subtype != STOP {
+                return event;
+            }
+            let data = send::<unsafe extern "C" fn(Id, Sel) -> isize>()(event, sel(c"data1"));
+            if data == POSTED.get() {
+                send::<unsafe extern "C" fn(Id, Sel, Id)>()(
+                    application(),
+                    sel(c"stop:"),
+                    std::ptr::null_mut(),
+                );
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
 /// The background blur behind a transparent window: a radius on macOS,
 /// through the private call winit makes for `set_blur` with a radius of 80,
 /// and the platform's blur on or off elsewhere.
@@ -1715,7 +1949,16 @@ pub unsafe fn window_show_menu(handle: i32, x: f64, y: f64) {
     });
 }
 
+/// On macOS xwindow delivers the redraw itself, after the window's queued
+/// events: winit delivers one only on a pump that waits.
 pub unsafe fn window_request_redraw(handle: i32) {
+    #[cfg(target_os = "macos")]
+    with((), |l| {
+        if let Some(open) = l.app.windows.get_mut(handle) {
+            open.redraw = true;
+        }
+    });
+    #[cfg(not(target_os = "macos"))]
     window(handle, (), |w| w.request_redraw());
 }
 
