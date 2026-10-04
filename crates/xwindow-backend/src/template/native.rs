@@ -427,8 +427,9 @@ impl Loop {
                 // A pump on macOS ends when AppKit dequeues the event winit
                 // posts to stop it, and AppKit can miss one posted while the
                 // run loop sleeps until the next display frame. So a poll
-                // stops behind the events already queued instead, and a wait
-                // wakes on a one-shot timer rather than winit's polling one.
+                // stops behind the events queued and those the window server
+                // has sent, without waiting, and a wait wakes on a one-shot
+                // timer rather than winit's polling one.
                 #[cfg(target_os = "macos")]
                 let _alarm = match timeout {
                     Some(timeout) if timeout.is_zero() => {
@@ -1616,6 +1617,11 @@ mod appkit {
         static _NSConcreteGlobalBlock: [usize; 0];
     }
 
+    #[link(name = "Foundation", kind = "framework")]
+    unsafe extern "C" {
+        static NSDefaultRunLoopMode: Id;
+    }
+
     #[link(name = "CoreFoundation", kind = "framework")]
     unsafe extern "C" {
         static kCFRunLoopCommonModes: *const c_void;
@@ -1689,6 +1695,8 @@ mod appkit {
         /// The last stop posted; an earlier one still queued stops nothing.
         static POSTED: Cell<isize> = const { Cell::new(0) };
         static WATCHING: Cell<bool> = const { Cell::new(false) };
+        /// How many more times the poll may go back for what arrived.
+        static ROUNDS: Cell<u32> = const { Cell::new(0) };
     }
 
     #[repr(C)]
@@ -1712,8 +1720,8 @@ mod appkit {
     };
 
     /// Makes the next run of the application return once it has handled
-    /// the events already queued, by posting a stop event behind them that
-    /// a local event monitor acts on. Before the application has finished
+    /// the events queued and those the window server has sent, by posting a
+    /// stop event behind them that a local event monitor acts on. Before the application has finished
     /// launching, winit's launch stops it instead.
     pub fn stop_after_queued() {
         unsafe {
@@ -1746,8 +1754,16 @@ mod appkit {
             }
             let posted = POSTED.get() + 1;
             POSTED.set(posted);
-            #[repr(C)]
-            struct Point(f64, f64);
+            ROUNDS.set(4);
+            post(posted);
+        }
+    }
+
+    /// Posts stop event `posted` behind the queued events.
+    unsafe fn post(posted: isize) {
+        #[repr(C)]
+        struct Point(f64, f64);
+        unsafe {
             let event = send::<
                 unsafe extern "C" fn(Id, Sel, u64, Point, u64, f64, isize, Id, i16, isize, isize) -> Id,
             >()(
@@ -1772,6 +1788,27 @@ mod appkit {
         }
     }
 
+    /// Whether an event other than an application-defined one is queued,
+    /// after one pass of the run loop that does not wait: the pass takes in
+    /// what the window server sent.
+    unsafe fn arrived() -> bool {
+        unsafe {
+            let past = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                class(c"NSDate"),
+                sel(c"distantPast"),
+            );
+            let next = send::<unsafe extern "C" fn(Id, Sel, u64, Id, Id, bool) -> Id>()(
+                application(),
+                sel(c"nextEventMatchingMask:untilDate:inMode:dequeue:"),
+                u64::MAX & !(1 << APPLICATION_DEFINED),
+                past,
+                NSDefaultRunLoopMode,
+                false,
+            );
+            !next.is_null()
+        }
+    }
+
     unsafe fn application() -> Id {
         unsafe {
             send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
@@ -1781,8 +1818,9 @@ mod appkit {
         }
     }
 
-    /// The monitor: it stops the application on the last stop event posted
-    /// and drops every stop event, leaving other events alone.
+    /// The monitor. On the last stop event posted it takes in what arrived
+    /// meanwhile and goes back for it, a few times at most, then stops the
+    /// application. It drops every stop event and leaves others alone.
     unsafe extern "C" fn seen(_: *mut Block, event: Id) -> Id {
         unsafe {
             let subtype = send::<unsafe extern "C" fn(Id, Sel) -> i16>()(event, sel(c"subtype"));
@@ -1791,11 +1829,17 @@ mod appkit {
             }
             let data = send::<unsafe extern "C" fn(Id, Sel) -> isize>()(event, sel(c"data1"));
             if data == POSTED.get() {
-                send::<unsafe extern "C" fn(Id, Sel, Id)>()(
-                    application(),
-                    sel(c"stop:"),
-                    std::ptr::null_mut(),
-                );
+                let rounds = ROUNDS.get();
+                if rounds > 0 && arrived() {
+                    ROUNDS.set(rounds - 1);
+                    post(data);
+                } else {
+                    send::<unsafe extern "C" fn(Id, Sel, Id)>()(
+                        application(),
+                        sel(c"stop:"),
+                        std::ptr::null_mut(),
+                    );
+                }
             }
             std::ptr::null_mut()
         }
