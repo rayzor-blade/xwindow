@@ -53,9 +53,21 @@ struct Open {
     /// The platform was asked for events since this window last answered a
     /// poll or wait with none.
     pumped: bool,
-    /// The program asked for a redraw that has not come yet, on platforms
-    /// where xwindow delivers it rather than winit.
-    redraw: bool,
+    /// A redraw the program asked for, on platforms where xwindow delivers
+    /// it rather than winit.
+    redraw: Redraw,
+}
+
+/// A redraw comes, as winit's does, once the platform has had a pass since
+/// the program asked for it, after the events that pass brought.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Redraw {
+    #[default]
+    None,
+    /// Asked for since the platform's last pass.
+    Asked,
+    /// Asked for before it: due after the window's queued events.
+    Due,
 }
 
 struct App {
@@ -387,7 +399,10 @@ impl ApplicationHandler for Host<'_> {
             return;
         }
         self.came = false;
-        self.app(|app| app.next_turn = ControlFlow::Wait);
+        self.app(|app| {
+            app.next_turn = ControlFlow::Wait;
+            app.passed();
+        });
         ACTIVE.set(Some(NonNull::from(event_loop)));
         self.done = !(self.turn)();
         ACTIVE.set(None);
@@ -451,6 +466,7 @@ impl Loop {
                 for (_, open) in self.app.windows.iter_mut() {
                     open.pumped = true;
                 }
+                self.app.passed();
             }
             Driver::Hosted => {
                 let _ = timeout;
@@ -473,7 +489,11 @@ impl Loop {
         let Some(open) = self.app.windows.get_mut(handle) else {
             return Event::None;
         };
-        if deadline.is_none() && open.events.is_empty() && !open.redraw && open.pumped {
+        if deadline.is_none()
+            && open.events.is_empty()
+            && open.redraw == Redraw::None
+            && open.pumped
+        {
             open.pumped = false;
             return Event::None;
         }
@@ -482,12 +502,20 @@ impl Loop {
                 if let Some(event) = open.events.pop_front() {
                     return event;
                 }
-                if std::mem::take(&mut open.redraw) {
+                if open.redraw == Redraw::Due {
+                    open.redraw = Redraw::None;
                     return Event::RedrawRequested;
                 }
             }
+            // A redraw asked for wants the platform's next pass now.
+            let asked = self
+                .app
+                .windows
+                .get(handle)
+                .is_some_and(|open| open.redraw == Redraw::Asked);
             if self.hosted() {
                 self.app.next_turn = match deadline {
+                    _ if asked => ControlFlow::Poll,
                     None => ControlFlow::Poll,
                     Some(None) => ControlFlow::Wait,
                     Some(Some(deadline)) => ControlFlow::WaitUntil(deadline),
@@ -495,30 +523,46 @@ impl Loop {
                 return Event::None;
             }
             let timeout = match deadline {
+                _ if asked => Some(Duration::ZERO),
                 None => Some(Duration::ZERO),
                 Some(None) => None,
                 Some(Some(deadline)) => Some(deadline.saturating_duration_since(Instant::now())),
             };
             self.pump(timeout);
-            let waited_out = match deadline {
-                None => true,
-                Some(None) => false,
-                Some(Some(deadline)) => Instant::now() >= deadline,
-            };
+            let waited_out = asked
+                || match deadline {
+                    None => true,
+                    Some(None) => false,
+                    Some(Some(deadline)) => Instant::now() >= deadline,
+                };
             if waited_out || self.app.windows.get(handle).is_none() {
                 let Some(open) = self.app.windows.get_mut(handle) else {
                     return Event::None;
                 };
-                return open.events.pop_front().unwrap_or_else(|| {
-                    open.pumped = false;
-                    Event::None
-                });
+                if let Some(event) = open.events.pop_front() {
+                    return event;
+                }
+                if open.redraw == Redraw::Due {
+                    open.redraw = Redraw::None;
+                    return Event::RedrawRequested;
+                }
+                open.pumped = false;
+                return Event::None;
             }
         }
     }
 }
 
 impl App {
+    /// The platform had a pass: redraws asked for before it are due.
+    fn passed(&mut self) {
+        for (_, open) in self.windows.iter_mut() {
+            if open.redraw == Redraw::Asked {
+                open.redraw = Redraw::Due;
+            }
+        }
+    }
+
     fn open_waiting(&mut self, event_loop: &ActiveEventLoop) {
         for (attributes, sizing) in std::mem::take(&mut self.opening) {
             let title = attributes.title.clone();
@@ -531,7 +575,7 @@ impl App {
                         sizing,
                         title,
                         pumped: false,
-                        redraw: false,
+                        redraw: Redraw::None,
                     });
                     self.ids.insert(id, handle);
                     Ok(handle)
@@ -2015,13 +2059,15 @@ pub unsafe fn window_show_menu(handle: i32, x: f64, y: f64) {
     });
 }
 
-/// On macOS xwindow delivers the redraw itself, after the window's queued
-/// events: winit delivers one only on a pump that waits.
+/// On macOS xwindow delivers the redraw itself: winit delivers one only on a
+/// pump that waits.
 pub unsafe fn window_request_redraw(handle: i32) {
     #[cfg(target_os = "macos")]
     with((), |l| {
         if let Some(open) = l.app.windows.get_mut(handle) {
-            open.redraw = true;
+            if open.redraw == Redraw::None {
+                open.redraw = Redraw::Asked;
+            }
         }
     });
     #[cfg(not(target_os = "macos"))]
