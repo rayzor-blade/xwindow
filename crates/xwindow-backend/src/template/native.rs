@@ -421,14 +421,6 @@ impl Loop {
                     events.listen_device_events(listen);
                     self.app.listen = listen;
                 }
-                // winit wakes a timed pump on macOS with a polling timer that
-                // re-arms on every pass of the run loop until the pump ends;
-                // an untimed pump woken by a one-shot timer costs far less.
-                #[cfg(target_os = "macos")]
-                let (_alarm, timeout) = match timeout {
-                    Some(timeout) if !timeout.is_zero() => (Some(Alarm::after(timeout)), None),
-                    timeout => (None, timeout),
-                };
                 events.pump_app_events(timeout, &mut self.app);
                 for (_, open) in self.app.windows.iter_mut() {
                     open.pumped = true;
@@ -496,67 +488,6 @@ impl Loop {
                     Event::None
                 });
             }
-        }
-    }
-}
-
-/// A one-shot timer on the main run loop, which does nothing but wake it.
-#[cfg(target_os = "macos")]
-struct Alarm(*mut std::ffi::c_void);
-
-#[cfg(target_os = "macos")]
-mod cf {
-    use std::ffi::c_void;
-
-    pub type Callout = extern "C" fn(*mut c_void, *mut c_void);
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        pub static kCFRunLoopCommonModes: *const c_void;
-        pub fn CFAbsoluteTimeGetCurrent() -> f64;
-        pub fn CFRunLoopGetMain() -> *mut c_void;
-        pub fn CFRunLoopTimerCreate(
-            allocator: *const c_void,
-            fire: f64,
-            interval: f64,
-            flags: usize,
-            order: isize,
-            callout: Callout,
-            context: *mut c_void,
-        ) -> *mut c_void;
-        pub fn CFRunLoopAddTimer(run_loop: *mut c_void, timer: *mut c_void, mode: *const c_void);
-        pub fn CFRunLoopTimerInvalidate(timer: *mut c_void);
-        pub fn CFRelease(object: *mut c_void);
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Alarm {
-    fn after(timeout: Duration) -> Self {
-        extern "C" fn wake(_: *mut std::ffi::c_void, _: *mut std::ffi::c_void) {}
-        unsafe {
-            let fire = cf::CFAbsoluteTimeGetCurrent() + timeout.as_secs_f64();
-            let timer = cf::CFRunLoopTimerCreate(
-                std::ptr::null(),
-                fire,
-                0.0,
-                0,
-                0,
-                wake,
-                std::ptr::null_mut(),
-            );
-            cf::CFRunLoopAddTimer(cf::CFRunLoopGetMain(), timer, cf::kCFRunLoopCommonModes);
-            Alarm(timer)
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl Drop for Alarm {
-    fn drop(&mut self) {
-        unsafe {
-            cf::CFRunLoopTimerInvalidate(self.0);
-            cf::CFRelease(self.0);
         }
     }
 }
