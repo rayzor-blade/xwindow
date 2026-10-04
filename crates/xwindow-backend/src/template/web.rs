@@ -857,6 +857,10 @@ pub unsafe fn window_set_blur(_: i32, _: bool) {}
 
 pub unsafe fn window_set_content_protected(_: i32, _: bool) {}
 
+pub unsafe fn window_set_has_shadow(_: i32, _: bool) {}
+
+pub unsafe fn window_set_blur_radius(_: i32, _: i32) {}
+
 pub unsafe fn window_set_scale_sizing(handle: i32, sizing: i32) {
     with(handle, (), |p| {
         if let Some(sizing) = ScaleSizing::from_native(sizing) {

@@ -1105,6 +1105,9 @@ fn attributes(a: &WindowAttributes) -> windows::WindowAttributes {
     if let Some(yes) = a.blur {
         out = out.with_blur(yes);
     }
+    if let Some(yes) = a.hasShadow {
+        out = with_shadow(out, yes);
+    }
     if let Some(yes) = a.contentProtected {
         out = out.with_content_protected(yes);
     }
@@ -1175,6 +1178,23 @@ fn buttons(close: bool, minimize: bool, maximize: bool) -> windows::WindowButton
     buttons
 }
 
+/// The system's shadow behind a window, where the platform draws one.
+#[allow(unused_variables)]
+fn with_shadow(out: windows::WindowAttributes, yes: bool) -> windows::WindowAttributes {
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        out.with_has_shadow(yes)
+    }
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowAttributesExtWindows;
+        out.with_undecorated_shadow(yes)
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    out
+}
+
 fn window_level(level: WindowLevel) -> windows::WindowLevel {
     match level {
         WindowLevel::Normal => windows::WindowLevel::Normal,
@@ -1217,7 +1237,13 @@ pub unsafe fn window_open(a: &WindowAttributes) -> i32 {
         }
         l.app.opening.clear();
         match l.app.opened.pop() {
-            Some(Ok(handle)) => handle,
+            Some(Ok(handle)) => {
+                // A radius is the window's own, so it is set once there is one.
+                if let (Some(radius), Some(open)) = (a.blurRadius, l.app.windows.get(handle)) {
+                    blur_radius(&open.window, radius);
+                }
+                handle
+            }
             Some(Err(error)) => {
                 host::raise(ErrorKind::Runtime, &format!("window: {error}"));
                 0
@@ -1540,6 +1566,77 @@ pub unsafe fn window_set_transparent(handle: i32, yes: bool) {
 
 pub unsafe fn window_set_blur(handle: i32, yes: bool) {
     window(handle, (), |w| w.set_blur(yes));
+}
+
+/// The background blur behind a transparent window: a radius on macOS,
+/// through the private call winit makes for `set_blur` with a radius of 80,
+/// and the platform's blur on or off elsewhere.
+fn blur_radius(window: &windows::Window, radius: i32) {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::{c_char, c_void};
+
+        #[link(name = "objc")]
+        unsafe extern "C" {
+            fn sel_registerName(name: *const c_char) -> *const c_void;
+            fn objc_msgSend();
+        }
+        #[link(name = "CoreGraphics", kind = "framework")]
+        unsafe extern "C" {
+            fn CGSMainConnectionID() -> *mut c_void;
+            fn CGSSetWindowBackgroundBlurRadius(
+                connection: *mut c_void,
+                window: isize,
+                radius: i64,
+            ) -> i32;
+        }
+        let Ok(handle) = window.window_handle() else {
+            return;
+        };
+        let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+            return;
+        };
+        unsafe {
+            // [[view window] windowNumber], each send typed as its method is.
+            let object: unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let integer: unsafe extern "C" fn(*mut c_void, *const c_void) -> isize =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let ns_window = object(
+                appkit.ns_view.as_ptr(),
+                sel_registerName(c"window".as_ptr()),
+            );
+            if ns_window.is_null() {
+                return;
+            }
+            let number = integer(ns_window, sel_registerName(c"windowNumber".as_ptr()));
+            CGSSetWindowBackgroundBlurRadius(
+                CGSMainConnectionID(),
+                number,
+                i64::from(radius.max(0)),
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    window.set_blur(radius > 0);
+}
+
+pub unsafe fn window_set_blur_radius(handle: i32, radius: i32) {
+    window(handle, (), |w| blur_radius(w, radius));
+}
+
+#[allow(unused_variables)]
+pub unsafe fn window_set_has_shadow(handle: i32, yes: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::WindowExtMacOS;
+        window(handle, (), |w| w.set_has_shadow(yes));
+    }
+    #[cfg(windows)]
+    {
+        use winit::platform::windows::WindowExtWindows;
+        window(handle, (), |w| w.set_undecorated_shadow(yes));
+    }
 }
 
 pub unsafe fn window_set_content_protected(handle: i32, yes: bool) {

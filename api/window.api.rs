@@ -342,6 +342,12 @@ struct WindowAttributes {
     decorations: Option<bool>,
     transparent: Option<bool>,
     blur: Option<bool>,
+    /// The system's shadow behind the window: macOS draws one from the
+    /// window's alpha, and Windows one behind an undecorated window.
+    hasShadow: Option<bool>,
+    /// How far the background behind a transparent window is blurred, 0 for
+    /// none: a radius on macOS, and the platform's blur on or off elsewhere.
+    blurRadius: Option<i32>,
     contentProtected: Option<bool>,
     fullscreen: Option<bool>,
     active: Option<bool>,
@@ -477,6 +483,15 @@ trait Window {
     fn setTransparent(this: &Window, transparent: bool);
     #[native(window_set_blur)]
     fn setBlur(this: &Window, blur: bool);
+    /// The system's shadow behind the window, on macOS and, for an
+    /// undecorated window, Windows; elsewhere nothing.
+    #[native(window_set_has_shadow)]
+    fn setHasShadow(this: &Window, hasShadow: bool);
+    /// How far the background behind a transparent window is blurred, 0 for
+    /// none: a radius on macOS, where `setBlur` means a radius of 80, and the
+    /// platform's blur on or off elsewhere.
+    #[native(window_set_blur_radius)]
+    fn setBlurRadius(this: &Window, radius: i32);
     #[native(window_set_content_protected)]
     fn setContentProtected(this: &Window, protected: bool);
     #[native(window_set_scale_sizing)]

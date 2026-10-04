@@ -77,7 +77,7 @@ The declaration is [`api/window.api.rs`](api/window.api.rs). It covers:
 
 | Area | What it has |
 |---|---|
-| Window | Size, position, inner position, scale, title, icon, theme, visibility, focus, fullscreen, exclusive fullscreen, decorations, enabled buttons, resize increments, level, transparency, blur, content protection, dragging, the window menu |
+| Window | Size, position, inner position, scale, title, icon, theme, visibility, focus, fullscreen, exclusive fullscreen, decorations, enabled buttons, resize increments, level, transparency, blur and its radius, shadow, content protection, dragging, the window menu |
 | Cursor | Icons, RGBA images, visibility, grab, position, hit testing |
 | Input methods | IME allowance, purpose and cursor area |
 | Monitors | Name, size, position, scale, refresh rate, video modes |
