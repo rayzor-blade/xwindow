@@ -546,6 +546,7 @@ impl Loop {
 }
 
 /// What a call on a window can change that the program hears of.
+#[cfg(target_os = "macos")]
 #[derive(Clone, Copy, PartialEq)]
 struct State {
     size: winit::dpi::PhysicalSize<u32>,
@@ -553,6 +554,7 @@ struct State {
     focused: bool,
 }
 
+#[cfg(target_os = "macos")]
 impl State {
     fn of(window: &windows::Window) -> Self {
         State {
@@ -590,6 +592,7 @@ impl App {
     }
 
     /// Each window's size, position and focus, to compare after a call.
+    #[cfg(target_os = "macos")]
     fn states(&self) -> Vec<(i32, State)> {
         self.windows
             .iter()
@@ -599,6 +602,7 @@ impl App {
 
     /// Delivers what changed since `before`, as the platform's events
     /// would have.
+    #[cfg(target_os = "macos")]
     fn changed(&mut self, before: Vec<(i32, State)>) {
         for (handle, was) in before {
             let Some(open) = self.windows.get(handle) else {
