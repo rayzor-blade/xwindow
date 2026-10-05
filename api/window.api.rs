@@ -407,6 +407,8 @@ trait Window {
     fn close(this: &Window);
 
     // What the window is: physical pixels.
+    /// The content's width in physical pixels; `setSize` takes logical
+    /// ones, this over `scaleFactor`.
     #[native(window_width)]
     fn width(this: &Window) -> i32;
     #[native(window_height)]
@@ -415,6 +417,8 @@ trait Window {
     fn outerWidth(this: &Window) -> i32;
     #[native(window_outer_height)]
     fn outerHeight(this: &Window) -> i32;
+    /// Where the window's frame is, in physical pixels; `setPosition`
+    /// takes logical ones, this over `scaleFactor`.
     #[native(window_x)]
     fn x(this: &Window) -> i32;
     #[native(window_y)]
@@ -456,6 +460,8 @@ trait Window {
     // What a program asks of the window: logical sizes and positions.
     #[native(window_set_title)]
     fn setTitle(this: &Window, title: Text);
+    /// The content's size in logical pixels: `width` and `height` over
+    /// `scaleFactor`.
     #[native(window_set_size)]
     fn setSize(this: &Window, width: i32, height: i32);
     /// A size of zero by zero removes the limit.
@@ -463,6 +469,8 @@ trait Window {
     fn setMinSize(this: &Window, width: i32, height: i32);
     #[native(window_set_max_size)]
     fn setMaxSize(this: &Window, width: i32, height: i32);
+    /// Move the window's frame to logical pixels: `x` and `y` over
+    /// `scaleFactor`.
     #[native(window_set_position)]
     fn setPosition(this: &Window, x: i32, y: i32);
     #[native(window_set_resizable)]
