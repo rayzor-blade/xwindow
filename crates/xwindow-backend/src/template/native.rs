@@ -439,23 +439,15 @@ impl Loop {
                     events.listen_device_events(listen);
                     self.app.listen = listen;
                 }
-                // A pump on macOS ends when AppKit dequeues the event winit
-                // posts to stop it, and AppKit can miss one posted while the
-                // run loop sleeps until the next display frame. So a poll
-                // stops behind the events queued and those the window server
-                // has sent, without waiting, and a wait wakes on a one-shot
-                // timer rather than winit's polling one.
+                // A run of the application on macOS returns only once AppKit
+                // dequeues an event after it is stopped, and AppKit can miss
+                // one posted while it waits; xwindow serves the run itself.
                 #[cfg(target_os = "macos")]
-                let _alarm = match timeout {
-                    Some(timeout) if timeout.is_zero() => {
-                        appkit::stop_after_queued();
-                        None
-                    }
-                    Some(timeout) => Some(appkit::Alarm::after(timeout)),
-                    None => None,
+                let timeout = if appkit::serve(timeout) {
+                    None
+                } else {
+                    timeout
                 };
-                #[cfg(target_os = "macos")]
-                let timeout = timeout.filter(|timeout| timeout.is_zero());
                 // The pump only queues events in Rust's memory and calls
                 // nothing in the program, so the runtime may collect while
                 // it waits.
@@ -1661,12 +1653,12 @@ impl Drop for Blocking {
     }
 }
 
-/// What the macOS pump needs from AppKit and CoreFoundation beyond winit.
+/// What the macOS pump needs from AppKit beyond winit.
 #[cfg(target_os = "macos")]
 mod appkit {
     use std::cell::Cell;
     use std::ffi::{c_char, c_void};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     type Id = *mut c_void;
     type Sel = *const c_void;
@@ -1676,6 +1668,8 @@ mod appkit {
         fn sel_registerName(name: *const c_char) -> Sel;
         fn objc_getClass(name: *const c_char) -> Id;
         fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
     }
 
     #[link(name = "System")]
@@ -1686,25 +1680,6 @@ mod appkit {
     #[link(name = "Foundation", kind = "framework")]
     unsafe extern "C" {
         static NSDefaultRunLoopMode: Id;
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        static kCFRunLoopCommonModes: *const c_void;
-        fn CFAbsoluteTimeGetCurrent() -> f64;
-        fn CFRunLoopGetMain() -> *mut c_void;
-        fn CFRunLoopTimerCreate(
-            allocator: *const c_void,
-            fire: f64,
-            interval: f64,
-            flags: usize,
-            order: isize,
-            callout: extern "C" fn(*mut c_void, *mut c_void),
-            context: *mut c_void,
-        ) -> *mut c_void;
-        fn CFRunLoopAddTimer(run_loop: *mut c_void, timer: *mut c_void, mode: *const c_void);
-        fn CFRunLoopTimerInvalidate(timer: *mut c_void);
-        fn CFRelease(object: *mut c_void);
     }
 
     /// `objc_msgSend`, typed as the method it sends.
@@ -1721,48 +1696,24 @@ mod appkit {
         unsafe { sel_registerName(name.as_ptr()) }
     }
 
-    /// A one-shot timer on the main run loop, which does nothing but wake it.
-    pub struct Alarm(*mut c_void);
-
-    impl Alarm {
-        pub fn after(timeout: Duration) -> Self {
-            extern "C" fn wake(_: *mut c_void, _: *mut c_void) {}
-            unsafe {
-                let fire = CFAbsoluteTimeGetCurrent() + timeout.as_secs_f64();
-                let timer = CFRunLoopTimerCreate(
-                    std::ptr::null(),
-                    fire,
-                    0.0,
-                    0,
-                    0,
-                    wake,
-                    std::ptr::null_mut(),
-                );
-                CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
-                Alarm(timer)
-            }
-        }
-    }
-
-    impl Drop for Alarm {
-        fn drop(&mut self) {
-            unsafe {
-                CFRunLoopTimerInvalidate(self.0);
-                CFRelease(self.0);
-            }
-        }
-    }
-
     const APPLICATION_DEFINED: u64 = 15;
-    /// The subtype marking xwindow's stop events among application-defined ones.
-    const STOP: i16 = 0x7877;
+    /// The subtype marking xwindow's serve events among application-defined
+    /// ones; winit's own stop events have subtype 0.
+    const SERVE: i16 = 0x7877;
+
+    /// How long the run being served may wait for an event.
+    #[derive(Clone, Copy)]
+    enum Until {
+        Now,
+        At(Instant),
+        Never,
+    }
 
     thread_local! {
-        /// The last stop posted; an earlier one still queued stops nothing.
+        /// The last serve event posted; an earlier one still queued is spent.
         static POSTED: Cell<isize> = const { Cell::new(0) };
+        static UNTIL: Cell<Until> = const { Cell::new(Until::Now) };
         static WATCHING: Cell<bool> = const { Cell::new(false) };
-        /// How many more times the poll may go back for what arrived.
-        static ROUNDS: Cell<u32> = const { Cell::new(0) };
     }
 
     #[repr(C)]
@@ -1785,11 +1736,16 @@ mod appkit {
         size: std::mem::size_of::<Block>(),
     };
 
-    /// Makes the next run of the application return once it has handled
-    /// the events queued and those the window server has sent, by posting a
-    /// stop event behind them that a local event monitor acts on. Before the application has finished
-    /// launching, winit's launch stops it instead.
-    pub fn stop_after_queued() {
+    /// Makes the next run of the application serve events itself for up to
+    /// `timeout`, forever for none, and then stop: true unless the
+    /// application has yet to finish launching, which winit's launch stops.
+    ///
+    /// The run starts on a serve event posted now, which AppKit sees before
+    /// it waits, and a local event monitor does the serving: it takes
+    /// events with a deadline and hands each to the application, which
+    /// returns at the deadline, where a run waits for an event that stops
+    /// it and AppKit can miss one posted while it sleeps.
+    pub fn serve(timeout: Option<Duration>) -> bool {
         unsafe {
             let running: Id = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
                 class(c"NSRunningApplication"),
@@ -1800,7 +1756,7 @@ mod appkit {
                 sel(c"isFinishedLaunching"),
             );
             if !launched {
-                return;
+                return false;
             }
             if !WATCHING.replace(true) {
                 // A global block: it captures nothing and is never freed.
@@ -1818,14 +1774,19 @@ mod appkit {
                     block,
                 );
             }
+            UNTIL.set(match timeout {
+                Some(timeout) if timeout.is_zero() => Until::Now,
+                Some(timeout) => Until::At(Instant::now() + timeout),
+                None => Until::Never,
+            });
             let posted = POSTED.get() + 1;
             POSTED.set(posted);
-            ROUNDS.set(4);
             post(posted);
+            true
         }
     }
 
-    /// Posts stop event `posted` behind the queued events.
+    /// Posts serve event `posted` behind the queued events.
     unsafe fn post(posted: isize) {
         #[repr(C)]
         struct Point(f64, f64);
@@ -1841,7 +1802,7 @@ mod appkit {
                 0.0,
                 0,
                 std::ptr::null_mut(),
-                STOP,
+                SERVE,
                 posted,
                 0,
             );
@@ -1854,27 +1815,6 @@ mod appkit {
         }
     }
 
-    /// Whether an event other than an application-defined one is queued,
-    /// after one pass of the run loop that does not wait: the pass takes in
-    /// what the window server sent.
-    unsafe fn arrived() -> bool {
-        unsafe {
-            let past = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
-                class(c"NSDate"),
-                sel(c"distantPast"),
-            );
-            let next = send::<unsafe extern "C" fn(Id, Sel, u64, Id, Id, bool) -> Id>()(
-                application(),
-                sel(c"nextEventMatchingMask:untilDate:inMode:dequeue:"),
-                u64::MAX & !(1 << APPLICATION_DEFINED),
-                past,
-                NSDefaultRunLoopMode,
-                false,
-            );
-            !next.is_null()
-        }
-    }
-
     unsafe fn application() -> Id {
         unsafe {
             send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
@@ -1884,29 +1824,73 @@ mod appkit {
         }
     }
 
-    /// The monitor. On the last stop event posted it takes in what arrived
-    /// meanwhile and goes back for it, a few times at most, then stops the
-    /// application. It drops every stop event and leaves others alone.
+    /// The next event, waiting for one until `until`; none once it passes.
+    unsafe fn next(until: Until) -> Id {
+        unsafe {
+            let date = match until {
+                Until::Now => send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                    class(c"NSDate"),
+                    sel(c"distantPast"),
+                ),
+                Until::At(at) => send::<unsafe extern "C" fn(Id, Sel, f64) -> Id>()(
+                    class(c"NSDate"),
+                    sel(c"dateWithTimeIntervalSinceNow:"),
+                    at.saturating_duration_since(Instant::now()).as_secs_f64(),
+                ),
+                Until::Never => send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                    class(c"NSDate"),
+                    sel(c"distantFuture"),
+                ),
+            };
+            send::<unsafe extern "C" fn(Id, Sel, u64, Id, Id, bool) -> Id>()(
+                application(),
+                sel(c"nextEventMatchingMask:untilDate:inMode:dequeue:"),
+                u64::MAX,
+                date,
+                NSDefaultRunLoopMode,
+                true,
+            )
+        }
+    }
+
+    /// The monitor. On the last serve event posted it hands the application
+    /// what is queued and what arrives until the deadline, returning once
+    /// it has handled anything, then stops the application. It drops every
+    /// serve event and winit's stop events, and leaves others alone.
     unsafe extern "C" fn seen(_: *mut Block, event: Id) -> Id {
         unsafe {
             let subtype = send::<unsafe extern "C" fn(Id, Sel) -> i16>()(event, sel(c"subtype"));
-            if subtype != STOP {
+            if subtype != SERVE {
                 return event;
             }
             let data = send::<unsafe extern "C" fn(Id, Sel) -> isize>()(event, sel(c"data1"));
-            if data == POSTED.get() {
-                let rounds = ROUNDS.get();
-                if rounds > 0 && arrived() {
-                    ROUNDS.set(rounds - 1);
-                    post(data);
-                } else {
-                    send::<unsafe extern "C" fn(Id, Sel, Id)>()(
-                        application(),
-                        sel(c"stop:"),
-                        std::ptr::null_mut(),
-                    );
+            if data != POSTED.get() {
+                return std::ptr::null_mut();
+            }
+            let app = application();
+            let mut until = UNTIL.get();
+            loop {
+                let pool = objc_autoreleasePoolPush();
+                let next = next(until);
+                let more = !next.is_null();
+                if more {
+                    let kind = send::<unsafe extern "C" fn(Id, Sel) -> u64>()(next, sel(c"type"));
+                    let ours = kind == APPLICATION_DEFINED && {
+                        let subtype =
+                            send::<unsafe extern "C" fn(Id, Sel) -> i16>()(next, sel(c"subtype"));
+                        subtype == SERVE || subtype == 0
+                    };
+                    if !ours {
+                        send::<unsafe extern "C" fn(Id, Sel, Id)>()(app, sel(c"sendEvent:"), next);
+                        until = Until::Now;
+                    }
+                }
+                objc_autoreleasePoolPop(pool);
+                if !more {
+                    break;
                 }
             }
+            send::<unsafe extern "C" fn(Id, Sel, Id)>()(app, sel(c"stop:"), std::ptr::null_mut());
             std::ptr::null_mut()
         }
     }
