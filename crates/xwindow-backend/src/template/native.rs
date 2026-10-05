@@ -1696,6 +1696,7 @@ mod appkit {
         unsafe { sel_registerName(name.as_ptr()) }
     }
 
+    const LEFT_MOUSE_DOWN: u64 = 1;
     const APPLICATION_DEFINED: u64 = 15;
     /// The subtype marking xwindow's serve events among application-defined
     /// ones; winit's own stop events have subtype 0.
@@ -1714,6 +1715,8 @@ mod appkit {
         static POSTED: Cell<isize> = const { Cell::new(0) };
         static UNTIL: Cell<Until> = const { Cell::new(Until::Now) };
         static WATCHING: Cell<bool> = const { Cell::new(false) };
+        /// The last left button press, retained.
+        static PRESSED: Cell<Id> = const { Cell::new(std::ptr::null_mut()) };
     }
 
     #[repr(C)]
@@ -1770,7 +1773,7 @@ mod appkit {
                 send::<unsafe extern "C" fn(Id, Sel, u64, *mut Block) -> Id>()(
                     class(c"NSEvent"),
                     sel(c"addLocalMonitorForEventsMatchingMask:handler:"),
-                    1 << APPLICATION_DEFINED,
+                    (1 << APPLICATION_DEFINED) | (1 << LEFT_MOUSE_DOWN),
                     block,
                 );
             }
@@ -1782,6 +1785,28 @@ mod appkit {
             let posted = POSTED.get() + 1;
             POSTED.set(posted);
             post(posted);
+            true
+        }
+    }
+
+    /// Starts AppKit's move of the window `view` is in, with the pointer, as
+    /// from the last left button press: winit uses the current event, which
+    /// the press no longer is once the program handles it.
+    pub fn drag(view: *mut c_void) -> bool {
+        unsafe {
+            let pressed = PRESSED.get();
+            if pressed.is_null() {
+                return false;
+            }
+            let window = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(view, sel(c"window"));
+            if window.is_null() {
+                return false;
+            }
+            send::<unsafe extern "C" fn(Id, Sel, Id)>()(
+                window,
+                sel(c"performWindowDragWithEvent:"),
+                pressed,
+            );
             true
         }
     }
@@ -1859,6 +1884,15 @@ mod appkit {
     /// serve event and winit's stop events, and leaves others alone.
     unsafe extern "C" fn seen(_: *mut Block, event: Id) -> Id {
         unsafe {
+            let kind = send::<unsafe extern "C" fn(Id, Sel) -> u64>()(event, sel(c"type"));
+            if kind == LEFT_MOUSE_DOWN {
+                let retained = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(event, sel(c"retain"));
+                let last = PRESSED.replace(retained);
+                if !last.is_null() {
+                    send::<unsafe extern "C" fn(Id, Sel)>()(last, sel(c"release"));
+                }
+                return event;
+            }
             let subtype = send::<unsafe extern "C" fn(Id, Sel) -> i16>()(event, sel(c"subtype"));
             if subtype != SERVE {
                 return event;
@@ -2017,7 +2051,15 @@ pub unsafe fn window_set_exclusive_fullscreen(handle: i32, mode: i32) {
 }
 
 pub unsafe fn window_drag(handle: i32) -> bool {
-    window(handle, false, |w| w.drag_window().is_ok())
+    window(handle, false, |w| {
+        #[cfg(target_os = "macos")]
+        if let Ok(handle) = w.window_handle()
+            && let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_raw()
+        {
+            return appkit::drag(appkit.ns_view.as_ptr());
+        }
+        w.drag_window().is_ok()
+    })
 }
 
 pub unsafe fn window_drag_resize(handle: i32, direction: i32) -> bool {
