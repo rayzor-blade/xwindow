@@ -883,9 +883,24 @@ impl Desktop {
         let marks = self.marks();
         unsafe { native::window_set_fullscreen(h, true) };
         let what = format!("Resized to the monitor's {screen:?}");
-        self.expect(A, marks[A], &what, sized(screen))?;
+        if self.platform == Platform::AppKit {
+            // AppKit keeps fullscreen content below a camera housing.
+            self.expect(A, marks[A], &what, |e| {
+                matches!(e, Event::Resized { width, height }
+                    if *width == i64::from(screen.0)
+                        && *height <= i64::from(screen.1)
+                        && *height > i64::from(screen.1) * 9 / 10)
+            })?;
+        } else {
+            self.expect(A, marks[A], &what, sized(screen))?;
+        }
         if !unsafe { native::window_is_fullscreen(h) } {
             return Err("isFullscreen is false while fullscreen".into());
+        }
+        if self.platform == Platform::AppKit {
+            // Leaving while AppKit still animates into the fullscreen space
+            // leaves the window at the fullscreen size.
+            self.pump(Duration::from_secs(1));
         }
         let marks = self.marks();
         unsafe { native::window_set_fullscreen(h, false) };
@@ -1123,7 +1138,8 @@ fn input_for(platform: Platform, wins: &[Win]) -> Result<Box<dyn Input>, String>
             .map_err(|why| format!("not under sway (no SWAYSOCK), and not under GNOME: {why}")),
         #[cfg(windows)]
         Platform::Win32 => Ok(Box::new(windows_input::SendInput)),
-        Platform::AppKit => Err("no synthetic input on macOS".into()),
+        #[cfg(target_os = "macos")]
+        Platform::AppKit => Ok(Box::new(quartz::Quartz)),
         _ => Err("no synthetic input for this platform".into()),
     }
 }
@@ -1879,6 +1895,175 @@ mod windows_input {
                     key(SCAN_LSHIFT, false, true),
                 ]),
                 Stroke::Left => inject(&[key(SCAN_LEFT, true, false), key(SCAN_LEFT, true, true)]),
+            }
+        }
+    }
+}
+
+/// macOS through Quartz events posted at the HID level, which need the
+/// Accessibility permission for the terminal that runs the test.
+#[cfg(target_os = "macos")]
+mod quartz {
+    use std::ffi::c_void;
+
+    use super::{Input, Stroke, Win, native};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+
+    type Event = *mut c_void;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventCreate(source: *const c_void) -> Event;
+        fn CGEventGetLocation(event: Event) -> CGPoint;
+        fn CGEventCreateMouseEvent(
+            source: *const c_void,
+            kind: u32,
+            at: CGPoint,
+            button: u32,
+        ) -> Event;
+        fn CGEventCreateKeyboardEvent(source: *const c_void, key: u16, down: bool) -> Event;
+        fn CGEventCreateScrollWheelEvent2(
+            source: *const c_void,
+            units: u32,
+            count: u32,
+            wheel1: i32,
+            wheel2: i32,
+            wheel3: i32,
+        ) -> Event;
+        fn CGEventSetFlags(event: Event, flags: u64);
+        fn CGEventSetIntegerValueField(event: Event, field: u32, value: i64);
+        fn CGEventPost(tap: u32, event: Event);
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(object: *const c_void);
+    }
+
+    const HID: u32 = 0;
+    const LEFT_MOUSE_DOWN: u32 = 1;
+    const LEFT_MOUSE_UP: u32 = 2;
+    const MOUSE_MOVED: u32 = 5;
+    const LEFT: u32 = 0;
+    const PIXEL: u32 = 0;
+    const DELTA_X: u32 = 4;
+    const DELTA_Y: u32 = 5;
+    const SHIFT: u64 = 0x20000;
+    // Virtual key codes.
+    const KEY_A: u16 = 0x00;
+    const KEY_B: u16 = 0x0b;
+    const KEY_SHIFT: u16 = 0x38;
+    const KEY_LEFT: u16 = 0x7b;
+
+    /// Posts `event` and releases it.
+    fn post(event: Event) -> Result<(), String> {
+        if event.is_null() {
+            return Err("Quartz made no event".into());
+        }
+        unsafe {
+            CGEventPost(HID, event);
+            CFRelease(event);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        Ok(())
+    }
+
+    fn pointer() -> CGPoint {
+        unsafe {
+            let event = CGEventCreate(std::ptr::null());
+            let at = CGEventGetLocation(event);
+            CFRelease(event);
+            at
+        }
+    }
+
+    fn mouse(kind: u32, at: CGPoint) -> Event {
+        unsafe { CGEventCreateMouseEvent(std::ptr::null(), kind, at, LEFT) }
+    }
+
+    fn key(code: u16, down: bool, flags: u64) -> Result<(), String> {
+        let event = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), code, down) };
+        if !event.is_null() {
+            unsafe { CGEventSetFlags(event, flags) };
+        }
+        post(event)
+    }
+
+    pub struct Quartz;
+
+    impl Input for Quartz {
+        fn name(&self) -> &'static str {
+            "Quartz"
+        }
+
+        fn point(&mut self, w: &Win, x: f64, y: f64) -> Result<(), String> {
+            // Global points, from the top left of the main display.
+            let scale = unsafe { native::window_scale_factor(w.handle) };
+            let (left, top) = unsafe {
+                (
+                    native::window_inner_x(w.handle) as f64 / scale,
+                    native::window_inner_y(w.handle) as f64 / scale,
+                )
+            };
+            post(mouse(
+                MOUSE_MOVED,
+                CGPoint {
+                    x: left + x,
+                    y: top + y,
+                },
+            ))
+        }
+
+        fn nudge(&mut self) -> Result<(), String> {
+            let at = pointer();
+            let event = mouse(
+                MOUSE_MOVED,
+                CGPoint {
+                    x: at.x + 3.0,
+                    y: at.y + 2.0,
+                },
+            );
+            if !event.is_null() {
+                unsafe {
+                    CGEventSetIntegerValueField(event, DELTA_X, 3);
+                    CGEventSetIntegerValueField(event, DELTA_Y, 2);
+                }
+            }
+            post(event)
+        }
+
+        fn click(&mut self) -> Result<(), String> {
+            let at = pointer();
+            post(mouse(LEFT_MOUSE_DOWN, at))?;
+            post(mouse(LEFT_MOUSE_UP, at))
+        }
+
+        fn scroll_up(&mut self) -> Result<(), String> {
+            post(unsafe { CGEventCreateScrollWheelEvent2(std::ptr::null(), PIXEL, 1, 10, 0, 0) })
+        }
+
+        fn key(&mut self, stroke: Stroke) -> Result<(), String> {
+            match stroke {
+                Stroke::A => {
+                    key(KEY_A, true, 0)?;
+                    key(KEY_A, false, 0)
+                }
+                Stroke::ShiftB => {
+                    key(KEY_SHIFT, true, SHIFT)?;
+                    key(KEY_B, true, SHIFT)?;
+                    key(KEY_B, false, SHIFT)?;
+                    key(KEY_SHIFT, false, 0)
+                }
+                Stroke::Left => {
+                    key(KEY_LEFT, true, 0)?;
+                    key(KEY_LEFT, false, 0)
+                }
             }
         }
     }

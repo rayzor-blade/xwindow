@@ -545,7 +545,80 @@ impl Loop {
     }
 }
 
+/// What a call on a window can change that the program hears of.
+#[derive(Clone, Copy, PartialEq)]
+struct State {
+    size: winit::dpi::PhysicalSize<u32>,
+    position: Option<winit::dpi::PhysicalPosition<i32>>,
+    focused: bool,
+}
+
+impl State {
+    fn of(window: &windows::Window) -> Self {
+        State {
+            size: window.inner_size(),
+            position: window.outer_position().ok(),
+            focused: window.has_focus(),
+        }
+    }
+}
+
 impl App {
+    /// Hands window `handle` a winit event, as winit does.
+    fn deliver(&mut self, handle: i32, mut event: WindowEvent) {
+        if let WindowEvent::ScaleFactorChanged {
+            inner_size_writer, ..
+        } = &mut event
+        {
+            if let Some(open) = self.windows.get(handle) {
+                if open.sizing == ScaleSizing::Physical {
+                    let _ = inner_size_writer.request_inner_size(open.window.inner_size());
+                }
+            }
+        }
+        if let WindowEvent::Focused(focused) = event {
+            if focused {
+                self.focused = Some(handle);
+            } else if self.focused == Some(handle) {
+                self.focused = None;
+            }
+        }
+        let event = window_event(self, event);
+        if let Some(open) = self.windows.get_mut(handle) {
+            open.events.push_back(event);
+        }
+    }
+
+    /// Each window's size, position and focus, to compare after a call.
+    fn states(&self) -> Vec<(i32, State)> {
+        self.windows
+            .iter()
+            .map(|(handle, open)| (handle, State::of(&open.window)))
+            .collect()
+    }
+
+    /// Delivers what changed since `before`, as the platform's events
+    /// would have.
+    fn changed(&mut self, before: Vec<(i32, State)>) {
+        for (handle, was) in before {
+            let Some(open) = self.windows.get(handle) else {
+                continue;
+            };
+            let now = State::of(&open.window);
+            if now.size != was.size {
+                self.deliver(handle, WindowEvent::Resized(now.size));
+            }
+            if now.position != was.position
+                && let Some(position) = now.position
+            {
+                self.deliver(handle, WindowEvent::Moved(position));
+            }
+            if now.focused != was.focused {
+                self.deliver(handle, WindowEvent::Focused(now.focused));
+            }
+        }
+    }
+
     /// The platform had a pass: redraws asked for before it are due.
     fn passed(&mut self) {
         for (_, open) in self.windows.iter_mut() {
@@ -671,30 +744,9 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, mut event: WindowEvent) {
-        let Some(&handle) = self.ids.get(&id) else {
-            return;
-        };
-        if let WindowEvent::ScaleFactorChanged {
-            inner_size_writer, ..
-        } = &mut event
-        {
-            if let Some(open) = self.windows.get(handle) {
-                if open.sizing == ScaleSizing::Physical {
-                    let _ = inner_size_writer.request_inner_size(open.window.inner_size());
-                }
-            }
-        }
-        if let WindowEvent::Focused(focused) = event {
-            if focused {
-                self.focused = Some(handle);
-            } else if self.focused == Some(handle) {
-                self.focused = None;
-            }
-        }
-        let event = window_event(self, event);
-        if let Some(open) = self.windows.get_mut(handle) {
-            open.events.push_back(event);
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if let Some(&handle) = self.ids.get(&id) {
+            self.deliver(handle, event);
         }
     }
 
@@ -1563,17 +1615,30 @@ pub unsafe fn window_set_title(handle: i32, title: Text) {
     });
 }
 
-pub unsafe fn window_set_size(handle: i32, width: i32, height: i32) {
+/// Runs `body` on window `handle`. AppKit tells winit what a call changed
+/// within the call, outside a pump, where winit drops it for want of a
+/// handler; so on macOS xwindow delivers the change itself.
+fn changing(handle: i32, body: impl FnOnce(&mut Open)) {
     with((), |l| {
+        #[cfg(target_os = "macos")]
+        let before = l.app.states();
         if let Some(open) = l.app.windows.get_mut(handle) {
-            // A size applied at once comes back here, with no Resized.
-            let size = LogicalSize::new(width.max(0), height.max(0));
-            if let Some(size) = open.window.request_inner_size(size) {
-                open.events.push_back(Event::Resized {
-                    width: i64::from(size.width),
-                    height: i64::from(size.height),
-                });
-            }
+            body(open);
+        }
+        #[cfg(target_os = "macos")]
+        l.app.changed(before);
+    });
+}
+
+pub unsafe fn window_set_size(handle: i32, width: i32, height: i32) {
+    changing(handle, |open| {
+        // A size applied at once comes back here, with no Resized.
+        let size = LogicalSize::new(width.max(0), height.max(0));
+        if let Some(size) = open.window.request_inner_size(size) {
+            open.events.push_back(Event::Resized {
+                width: i64::from(size.width),
+                height: i64::from(size.height),
+            });
         }
     });
 }
@@ -1584,16 +1649,20 @@ fn limit(width: i32, height: i32) -> Option<LogicalSize<i32>> {
 }
 
 pub unsafe fn window_set_min_size(handle: i32, width: i32, height: i32) {
-    window(handle, (), |w| w.set_min_inner_size(limit(width, height)));
+    changing(handle, |open| {
+        open.window.set_min_inner_size(limit(width, height))
+    });
 }
 
 pub unsafe fn window_set_max_size(handle: i32, width: i32, height: i32) {
-    window(handle, (), |w| w.set_max_inner_size(limit(width, height)));
+    changing(handle, |open| {
+        open.window.set_max_inner_size(limit(width, height))
+    });
 }
 
 pub unsafe fn window_set_position(handle: i32, x: i32, y: i32) {
-    window(handle, (), |w| {
-        w.set_outer_position(LogicalPosition::new(x, y))
+    changing(handle, |open| {
+        open.window.set_outer_position(LogicalPosition::new(x, y))
     });
 }
 
@@ -1602,25 +1671,26 @@ pub unsafe fn window_set_resizable(handle: i32, yes: bool) {
 }
 
 pub unsafe fn window_set_minimized(handle: i32, yes: bool) {
-    window(handle, (), |w| w.set_minimized(yes));
+    changing(handle, |open| open.window.set_minimized(yes));
 }
 
 pub unsafe fn window_set_maximized(handle: i32, yes: bool) {
-    window(handle, (), |w| w.set_maximized(yes));
+    changing(handle, |open| open.window.set_maximized(yes));
 }
 
 pub unsafe fn window_set_fullscreen(handle: i32, yes: bool) {
-    window(handle, (), |w| {
-        w.set_fullscreen(yes.then_some(windows::Fullscreen::Borderless(None)))
+    changing(handle, |open| {
+        open.window
+            .set_fullscreen(yes.then_some(windows::Fullscreen::Borderless(None)))
     });
 }
 
 pub unsafe fn window_set_decorations(handle: i32, yes: bool) {
-    window(handle, (), |w| w.set_decorations(yes));
+    changing(handle, |open| open.window.set_decorations(yes));
 }
 
 pub unsafe fn window_set_visible(handle: i32, yes: bool) {
-    window(handle, (), |w| w.set_visible(yes));
+    changing(handle, |open| open.window.set_visible(yes));
 }
 
 pub unsafe fn window_set_window_level(handle: i32, level: i32) {
@@ -2105,7 +2175,7 @@ pub unsafe fn window_pre_present_notify(handle: i32) {
 }
 
 pub unsafe fn window_focus(handle: i32) {
-    window(handle, (), |w| w.focus_window());
+    changing(handle, |open| open.window.focus_window());
 }
 
 pub unsafe fn window_request_attention(handle: i32, attention: i32) {
@@ -2179,9 +2249,30 @@ pub unsafe fn window_set_cursor_grab(handle: i32, grab: i32) -> bool {
     window(handle, false, |w| w.set_cursor_grab(mode).is_ok())
 }
 
+/// Moving the cursor brings no CursorMoved on macOS, so xwindow delivers one.
 pub unsafe fn window_set_cursor_position(handle: i32, x: f64, y: f64) -> bool {
-    window(handle, false, |w| {
-        w.set_cursor_position(LogicalPosition::new(x, y)).is_ok()
+    with(false, |l| {
+        let Some(open) = l.app.windows.get(handle) else {
+            return false;
+        };
+        let position = LogicalPosition::new(x, y);
+        if open.window.set_cursor_position(position).is_err() {
+            return false;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let position = position.to_physical(open.window.scale_factor());
+            // AppKit reports every pointer as this one device.
+            let device_id = DeviceId::dummy();
+            l.app.deliver(
+                handle,
+                WindowEvent::CursorMoved {
+                    device_id,
+                    position,
+                },
+            );
+        }
+        true
     })
 }
 

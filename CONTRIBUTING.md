@@ -213,8 +213,10 @@ haxe -cp /tmp/xwindow-ash -cp examples/events -main Main -hl /tmp/events.hl
 
 `XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop` opens real
 windows and drives them with synthetic input. It drives X11 with xdotool,
-sway and GNOME on Wayland, and Windows; CI runs it on X11, sway and
-Windows. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
+sway and GNOME on Wayland, Windows, and macOS through Quartz events, which
+need the Accessibility permission for the terminal; CI runs it on X11,
+sway and Windows. The macOS run moves the pointer and types into its
+windows, so keep the mouse and keyboard still while it runs. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
 private headless GNOME Shell, beside any session already open, and can
 screenshot the monitor while it runs:
 
