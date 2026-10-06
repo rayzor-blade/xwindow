@@ -216,7 +216,10 @@ windows and drives them with synthetic input. It drives X11 with xdotool,
 sway and GNOME on Wayland, Windows, and macOS through Quartz events, which
 need the Accessibility permission for the terminal; CI runs it on X11,
 sway and Windows. The macOS run moves the pointer and types into its
-windows, so keep the mouse and keyboard still while it runs. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
+windows, so keep the mouse and keyboard still while it runs. With Stage
+Manager on and another app in front, a new window waits in the side strip
+as a small tilted thumbnail until it is clicked, which input aimed at it
+misses. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
 private headless GNOME Shell, beside any session already open, and can
 screenshot the monitor while it runs:
 
