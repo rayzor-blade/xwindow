@@ -45,8 +45,11 @@ fn main() -> ExitCode {
         println!("desktop: skipped; set {GATE}=1 with a display to open real windows");
         return ExitCode::SUCCESS;
     }
-    let mut desktop = Desktop::default();
+    let external = std::env::var_os("XWINDOW_EXTERNAL_PUMP").is_some_and(|v| v == "1");
+    let mut desktop = Desktop { external, ..Default::default() };
+    if external { native::external_pump(true).expect("external pump"); }
     desktop.run();
+    if external { native::external_pump(false).expect("release external pump"); }
     desktop.report()
 }
 
@@ -106,6 +109,7 @@ enum Outcome {
 
 #[derive(Default)]
 struct Desktop {
+    external: bool,
     platform: Platform,
     wins: Vec<Win>,
     input: Option<Box<dyn Input>>,
@@ -231,6 +235,10 @@ impl Desktop {
             if left.is_zero() {
                 break;
             }
+            if self.external {
+                native::pump_external(Some(left.min(Duration::from_millis(25))));
+                continue;
+            }
             let Some(w) = self.wins.iter_mut().find(|w| w.open) else {
                 std::thread::sleep(left);
                 break;
@@ -244,6 +252,7 @@ impl Desktop {
     }
 
     fn collect(&mut self) {
+        if self.external { native::pump_external(Some(Duration::ZERO)); }
         for w in self.wins.iter_mut().filter(|w| w.open) {
             loop {
                 let event = unsafe { native::window_poll(w.handle) };

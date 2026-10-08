@@ -118,6 +118,7 @@ thread_local! {
     static ACTIVE: Cell<Option<NonNull<ActiveEventLoop>>> = const { Cell::new(None) };
     /// When device events should come, until the loop next runs and takes it.
     static LISTEN: Cell<Option<Listen>> = const { Cell::new(None) };
+    static EXTERNAL_PUMP: Cell<bool> = const { Cell::new(false) };
 }
 
 impl App {
@@ -239,6 +240,53 @@ pub fn attach(events: EventLoop<()>, drive: Drive<'_>) -> Result<(), String> {
             .map_err(|error| format!("window: {error}")),
         None => Ok(()),
     }
+}
+
+/// A runtime with its own I/O loop can wait in `pump_external` instead of
+/// periodically polling each window. While enabled, nonblocking window polls
+/// only drain the queues; the runtime is responsible for pumping on this thread.
+pub fn external_pump(enabled: bool) -> Result<(), String> {
+    if enabled {
+        if EXTERNAL_PUMP.get() {
+            return Err("window: an external event pump is already installed".to_owned());
+        }
+        if !with(false, |l| !l.hosted()) {
+            return Err("window: external pumping requires a pumped event loop".to_owned());
+        }
+    }
+    EXTERNAL_PUMP.set(enabled);
+    Ok(())
+}
+
+/// A thread-safe wake signal for an external runtime's I/O readiness watcher.
+#[cfg(not(target_os = "ios"))]
+pub fn external_waker() -> Option<winit::event_loop::EventLoopProxy<()>> {
+    with(None, |l| match &l.driver {
+        Driver::Pumped(events) => Some(events.create_proxy()),
+        Driver::Hosted => None,
+    })
+}
+
+fn pending(app: &App) -> bool {
+    app.windows
+        .iter()
+        .any(|(_, open)| !open.events.is_empty() || open.redraw == Redraw::Due)
+}
+
+pub fn external_pending() -> bool {
+    with(false, |l| pending(&l.app))
+}
+
+/// Wait for platform events once, or return immediately for events already
+/// queued. A proxy wake also returns, even if there is no window event to deliver.
+pub fn pump_external(timeout: Option<Duration>) -> bool {
+    with(false, |l| {
+        if !pending(&l.app) {
+            let asked = l.app.windows.iter().any(|(_, open)| open.redraw == Redraw::Asked);
+            l.pump(if asked { Some(Duration::ZERO) } else { timeout });
+        }
+        pending(&l.app)
+    })
 }
 
 // -- the hook for a host in C ---------------------------------------------------
@@ -499,6 +547,9 @@ impl Loop {
                     return Event::RedrawRequested;
                 }
             }
+            if deadline.is_none() && EXTERNAL_PUMP.get() {
+                return Event::None;
+            }
             // A redraw asked for wants the platform's next pass now.
             let asked = self
                 .app
@@ -722,6 +773,13 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
+        // The AppKit monitor may be waiting inside nextEvent, so hand it an
+        // actual queue event as well as waking CoreFoundation through the proxy.
+        #[cfg(target_os = "macos")]
+        appkit::wake();
+    }
+
     fn new_events(&mut self, event_loop: &ActiveEventLoop, _: native::StartCause) {
         if self.resumed {
             self.open_waiting(event_loop);
@@ -1775,6 +1833,7 @@ mod appkit {
     /// The subtype marking xwindow's serve events among application-defined
     /// ones; winit's own stop events have subtype 0.
     const SERVE: i16 = 0x7877;
+    const WAKE: i16 = 0x7878;
 
     /// How long the run being served may wait for an event.
     #[derive(Clone, Copy)]
@@ -1862,7 +1921,7 @@ mod appkit {
             });
             let posted = POSTED.get() + 1;
             POSTED.set(posted);
-            post(posted);
+            post(posted, SERVE);
             true
         }
     }
@@ -1889,11 +1948,17 @@ mod appkit {
         }
     }
 
-    /// Posts serve event `posted` behind the queued events.
-    unsafe fn post(posted: isize) {
+    /// Return a waiting external pump without manufacturing a window event.
+    pub fn wake() {
+        unsafe { post(0, WAKE); }
+    }
+
+    /// Posts an event behind the queued events; the queue retains it.
+    unsafe fn post(posted: isize, subtype: i16) {
         #[repr(C)]
         struct Point(f64, f64);
         unsafe {
+            let pool = objc_autoreleasePoolPush();
             let event = send::<
                 unsafe extern "C" fn(Id, Sel, u64, Point, u64, f64, isize, Id, i16, isize, isize) -> Id,
             >()(
@@ -1905,7 +1970,7 @@ mod appkit {
                 0.0,
                 0,
                 std::ptr::null_mut(),
-                SERVE,
+                subtype,
                 posted,
                 0,
             );
@@ -1915,6 +1980,7 @@ mod appkit {
                 event,
                 false,
             );
+            objc_autoreleasePoolPop(pool);
         }
     }
 
@@ -1972,6 +2038,9 @@ mod appkit {
                 return event;
             }
             let subtype = send::<unsafe extern "C" fn(Id, Sel) -> i16>()(event, sel(c"subtype"));
+            if subtype == WAKE {
+                return std::ptr::null_mut();
+            }
             if subtype != SERVE {
                 return event;
             }
@@ -1990,7 +2059,10 @@ mod appkit {
                     let ours = kind == APPLICATION_DEFINED && {
                         let subtype =
                             send::<unsafe extern "C" fn(Id, Sel) -> i16>()(next, sel(c"subtype"));
-                        subtype == SERVE || subtype == 0
+                        if subtype == WAKE {
+                            until = Until::Now;
+                        }
+                        subtype == SERVE || subtype == WAKE || subtype == 0
                     };
                     if !ours {
                         send::<unsafe extern "C" fn(Id, Sel, Id)>()(app, sel(c"sendEvent:"), next);

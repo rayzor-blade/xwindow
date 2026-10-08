@@ -116,6 +116,26 @@ The native backend shares one winit event loop among all windows, on the
 thread that opened the first. Each window's events are sorted into that
 window's queue. Raw device events go to the focused window.
 
+### Integrating another event loop
+
+An adapter already owning a main-thread I/O loop can enable
+`backend::external_pump(true)` after creating a pumped loop. Window `poll` then
+only drains queued events. The adapter calls `pump_external(timeout)` once when
+it is ready to wait; it returns when platform events, the timeout, or an
+`external_waker()` proxy signal arrives. `external_pending()` checks queued
+window work without pumping. Disable the integration before releasing the host.
+These hooks do not apply to `Drive::Turns`.
+
+Keep all window operations on the owning thread. A helper thread may watch the
+runtime's I/O descriptor and send a proxy wake; it must not pump the window loop
+or run application callbacks. On macOS, a proxy wake also interrupts AppKit's
+wait even when no mouse or window event arrives. The adapter must service its
+own timers, flush pending I/O registrations, and drain every managed window.
+
+`XWINDOW_DESKTOP=1 XWINDOW_EXTERNAL_PUMP=1 cargo test -p xwindow-check --test desktop`
+checks the desktop operations through these hooks. The default desktop test
+continues to exercise ordinary window polling and waiting.
+
 ### The host's hook
 
 By default the program pumps the loop inside `open`, `poll` and `wait`,
