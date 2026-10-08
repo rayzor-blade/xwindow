@@ -1824,18 +1824,22 @@ mod appkit {
     /// it and AppKit can miss one posted while it sleeps.
     pub fn serve(timeout: Option<Duration>) -> bool {
         unsafe {
-            let running: Id = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
-                class(c"NSRunningApplication"),
-                sel(c"currentApplication"),
-            );
-            let launched = send::<unsafe extern "C" fn(Id, Sel) -> bool>()(
-                running,
-                sel(c"isFinishedLaunching"),
-            );
-            if !launched {
-                return false;
-            }
-            if !WATCHING.replace(true) {
+            if !WATCHING.get() {
+                // Launch completion is monotonic. Querying it on every idle
+                // poll fetches dynamic properties through synchronous
+                // LaunchServices IPC; check only until the monitor is installed.
+                let running: Id = send::<unsafe extern "C" fn(Id, Sel) -> Id>()(
+                    class(c"NSRunningApplication"),
+                    sel(c"currentApplication"),
+                );
+                let launched = send::<unsafe extern "C" fn(Id, Sel) -> bool>()(
+                    running,
+                    sel(c"isFinishedLaunching"),
+                );
+                if !launched {
+                    return false;
+                }
+                WATCHING.set(true);
                 // A global block: it captures nothing and is never freed.
                 let block = Box::leak(Box::new(Block {
                     isa: _NSConcreteGlobalBlock.as_ptr().cast(),
