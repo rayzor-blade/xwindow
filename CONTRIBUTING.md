@@ -133,8 +133,16 @@ wait even when no mouse or window event arrives. The adapter must service its
 own timers, flush pending I/O registrations, and drain every managed window.
 
 `XWINDOW_DESKTOP=1 XWINDOW_EXTERNAL_PUMP=1 cargo test -p xwindow-check --test desktop`
-checks the desktop operations through these hooks. The default desktop test
-continues to exercise ordinary window polling and waiting.
+checks the desktop operations through these hooks, including a blocking idle
+interval and a cross-thread proxy wake with no pointer input. The default
+desktop test continues to exercise ordinary window polling and waiting.
+
+Validated on macOS/AppKit and the NUC's GNOME 50.1 Wayland session. The Wayland
+run covers frame callbacks, keyboard/pointer/wheel input, multi-window routing,
+clipboard, fullscreen and teardown. Client-controlled focus, cursor warping,
+window positioning and synthetic dropped paths are skipped where Wayland does
+not support them. Adapter integrations (such as Node/libuv) need their own
+platform validation in addition to these backend checks.
 
 ### The host's hook
 

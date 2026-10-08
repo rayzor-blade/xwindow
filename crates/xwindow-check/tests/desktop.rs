@@ -46,10 +46,17 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let external = std::env::var_os("XWINDOW_EXTERNAL_PUMP").is_some_and(|v| v == "1");
-    let mut desktop = Desktop { external, ..Default::default() };
-    if external { native::external_pump(true).expect("external pump"); }
+    let mut desktop = Desktop {
+        external,
+        ..Default::default()
+    };
+    if external {
+        native::external_pump(true).expect("external pump");
+    }
     desktop.run();
-    if external { native::external_pump(false).expect("release external pump"); }
+    if external {
+        native::external_pump(false).expect("release external pump");
+    }
     desktop.report()
 }
 
@@ -140,6 +147,10 @@ impl Desktop {
             None => println!("desktop: {:?}, no input: {}", self.platform, self.no_input),
         }
         self.pump(QUIET);
+        self.check(
+            "external pump blocks and wakes without input",
+            Self::external_wait,
+        );
         self.check("windows report size, title and monitor", Self::describe);
         self.check("events go to the window they are for", Self::routed);
         self.check("Window.focus focuses the window", Self::backend_focus);
@@ -252,7 +263,9 @@ impl Desktop {
     }
 
     fn collect(&mut self) {
-        if self.external { native::pump_external(Some(Duration::ZERO)); }
+        if self.external {
+            native::pump_external(Some(Duration::ZERO));
+        }
         for w in self.wins.iter_mut().filter(|w| w.open) {
             loop {
                 let event = unsafe { native::window_poll(w.handle) };
@@ -423,6 +436,70 @@ impl Desktop {
             }
         }
         Ok(None)
+    }
+
+    /// Unlike the bounded polling helpers, exercise an actual blocking wait.
+    /// Configure/focus events may finish asynchronously, so first find a quiet
+    /// interval. The proxy then has to wake an unbounded wait without input.
+    fn external_wait(&mut self) -> Checked {
+        if !self.external {
+            return skip("requires XWINDOW_EXTERNAL_PUMP=1");
+        }
+        #[cfg(target_os = "ios")]
+        return skip("iOS uses a hosted event loop");
+        #[cfg(not(target_os = "ios"))]
+        {
+            use std::sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            };
+
+            let mut idle = Duration::ZERO;
+            for _ in 0..100 {
+                self.collect();
+                let start = Instant::now();
+                native::pump_external(Some(Duration::from_millis(120)));
+                idle = start.elapsed();
+                if idle >= Duration::from_millis(100) {
+                    break;
+                }
+            }
+            if idle < Duration::from_millis(100) {
+                return Err("external pump never slept through a quiet interval".into());
+            }
+            self.collect();
+            if native::external_pending() {
+                return Err("window queues remain pending after collection".into());
+            }
+            let proxy = native::external_waker().ok_or("no external event proxy")?;
+            let fired = Arc::new(AtomicBool::new(false));
+            let sent = fired.clone();
+            let start = Instant::now();
+            let watcher = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(150));
+                sent.store(true, Ordering::Release);
+                proxy.send_event(()).expect("wake the live event loop");
+            });
+            let mut waits = 0;
+            loop {
+                native::pump_external(None);
+                waits += 1;
+                self.collect();
+                if fired.load(Ordering::Acquire) || waits >= 100 {
+                    break;
+                }
+            }
+            let elapsed = start.elapsed();
+            watcher.join().map_err(|_| "proxy wake thread panicked")?;
+            if waits >= 100
+                || elapsed < Duration::from_millis(125)
+                || elapsed > Duration::from_secs(1)
+            {
+                return Err(format!("proxy wake took {elapsed:?} with {waits} waits"));
+            }
+            println!("desktop: external idle {idle:?}, proxy wake {elapsed:?}, {waits} wait(s)");
+            Ok(None)
+        }
     }
 
     fn describe(&mut self) -> Checked {
@@ -1310,7 +1387,7 @@ mod gnome {
     use zbus::blocking::{Connection, Proxy};
     use zbus::zvariant::{OwnedObjectPath, Value};
 
-    use super::{Event, Input, Stroke, Win, native};
+    use super::{Event, Input, MouseElementState, Stroke, Win, native};
 
     // evdev codes.
     const KEY_A: u32 = 30;
@@ -1388,7 +1465,27 @@ mod gnome {
             };
             // The seat has a keyboard, which focus is, only once one types.
             mutter.key_strokes(&[KEY_LEFTSHIFT])?;
-            mutter.find(wins)?;
+            if let Err(error) = mutter.find(wins) {
+                // GNOME may stack equal-sized windows at exactly the same
+                // position. Move the visible window aside before looking for
+                // the one entirely covered by it.
+                if mutter.origins.len() != 1 {
+                    return Err(error);
+                }
+                let title = mutter.origins[0].0;
+                let visible = wins.iter().find(|w| w.title == title).ok_or(error)?;
+                let (x, _, width, _) = mutter.rect(visible)?;
+                let monitor = unsafe { native::window_monitor(visible.handle, 0) };
+                let room = f64::from(unsafe { native::monitor_width(monitor) });
+                let to_x = if x > (room - width) / 2.0 {
+                    24.0
+                } else {
+                    (room - width - 24.0).max(0.0)
+                };
+                mutter.move_to(visible, to_x, 48.0, wins)?;
+                mutter.origins.clear();
+                mutter.find(wins)?;
+            }
             mutter.separate(wins)?;
             for (title, x, y) in &mutter.origins {
                 println!("desktop: {title} found at {x}, {y}");
@@ -1470,7 +1567,9 @@ mod gnome {
             let (ax, ay, aw, ah) = self.rect(&wins[0])?;
             let (bx, by, bw, bh) = self.rect(&wins[1])?;
             let overlap = |x: f64, y: f64| {
-                x < ax + aw + GAP && ax < x + bw + GAP && y < ay + ah + GAP && ay < y + bh + GAP
+                // The compositor may clamp the requested 60px gap at a screen
+                // edge. A smaller clear gap is sufficient for input routing.
+                x < ax + aw + 8.0 && ax < x + bw + 8.0 && y < ay + ah + 8.0 && ay < y + bh + 8.0
             };
             if !overlap(bx, by) {
                 return Ok(());
@@ -1482,48 +1581,75 @@ mod gnome {
             } else {
                 (ax - GAP - bw).max(0.0)
             };
-            // Held where the first window does not cover the second.
-            let grab = (bx + bw - 12.0, by + bh - 12.0);
-            self.to(grab.0, grab.1)?;
-            self.session
-                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, true))
-                .map_err(fail("NotifyPointerButton"))?;
-            let handle = wins[1].handle;
-            let end = Instant::now() + Duration::from_secs(2);
-            loop {
-                let event = unsafe { native::window_wait(handle, 0.05) };
-                if matches!(event, Event::MouseInput { .. }) {
-                    break;
-                }
-                if Instant::now() >= end {
-                    return Err("the button held on the second window never reached it".into());
-                }
-            }
-            let dragged = unsafe { native::window_drag(handle) };
-            let (dx, dy) = (to_x - bx, ay - by);
-            for step in 1..=10 {
-                let t = f64::from(step) / 10.0;
-                self.to(grab.0 + dx * t, grab.1 + dy * t)?;
-                for w in wins {
-                    unsafe { native::window_wait(w.handle, 0.01) };
-                }
-            }
-            self.session
-                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, false))
-                .map_err(fail("NotifyPointerButton"))?;
-            if !dragged {
-                return Err("dragWindow refused to move the second window".into());
-            }
-            // The drag's own pointer events would misplace the window.
-            std::thread::sleep(Duration::from_millis(300));
-            for w in wins {
-                while unsafe { native::window_poll(w.handle) } != Event::None {}
-            }
+            self.move_to(&wins[1], to_x, ay, wins)?;
             self.origins.clear();
             self.find(wins)?;
             let (bx, by, ..) = self.rect(&wins[1])?;
             if overlap(bx, by) {
                 return Err(format!("dragWindow left the second window at {bx}, {by}"));
+            }
+            Ok(())
+        }
+
+        /// Move a known client area with the compositor's interactive drag.
+        fn move_to(&mut self, win: &Win, to_x: f64, to_y: f64, wins: &[Win]) -> Result<(), String> {
+            let (bx, by, bw, bh) = self.rect(win)?;
+            let grab = (bx + bw - 12.0, by + bh - 12.0);
+            self.to(grab.0, grab.1)?;
+            self.session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, true))
+                .map_err(fail("NotifyPointerButton"))?;
+            let moved = (|| -> Result<(), String> {
+                let handle = win.handle;
+                let end = Instant::now() + Duration::from_secs(2);
+                loop {
+                    let event = unsafe { native::window_wait(handle, 0.05) };
+                    if matches!(
+                        event,
+                        Event::MouseInput {
+                            state: MouseElementState::Pressed,
+                            ..
+                        }
+                    ) {
+                        break;
+                    }
+                    if Instant::now() >= end {
+                        return Err("the button held on the window never reached it".into());
+                    }
+                }
+                if !unsafe { native::window_drag(handle) } {
+                    return Err("dragWindow refused to move the window".into());
+                }
+                let (dx, dy) = (to_x - bx, to_y - by);
+                for step in 1..=10 {
+                    let t = f64::from(step) / 10.0;
+                    self.to(grab.0 + dx * t, grab.1 + dy * t)?;
+                    for w in wins {
+                        unsafe { native::window_wait(w.handle, 0.01) };
+                    }
+                }
+                Ok(())
+            })();
+            // Release even if moving failed, so the test never leaves a held button.
+            let released = self
+                .session
+                .call::<_, _, ()>("NotifyPointerButton", &(BTN_LEFT, false))
+                .map_err(fail("NotifyPointerButton"));
+            moved?;
+            released?;
+            // The drag's own pointer events would misplace the window.
+            std::thread::sleep(Duration::from_millis(300));
+            // Poll only drains queues under external integration. Import the
+            // compositor's final drag motion before discarding stale coordinates.
+            let settled = Instant::now() + Duration::from_millis(50);
+            loop {
+                for w in wins {
+                    while unsafe { native::window_poll(w.handle) } != Event::None {}
+                }
+                if Instant::now() >= settled {
+                    break;
+                }
+                native::pump_external(Some(Duration::from_millis(5)));
             }
             Ok(())
         }
