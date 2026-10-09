@@ -41,6 +41,12 @@ impl CursorMoves {
         }
     }
 
+    /// Whether an interior position is pending under an active quiet policy.
+    /// Desktop adapters can suppress duplicate X/Y valuators when raw input is disabled.
+    pub fn holding_position(&self) -> bool {
+        self.region.is_some() && self.latest.is_some()
+    }
+
     /// Before other input or application work: disable the rectangle and
     /// consume its latest position. Never queues an event or allocates.
     pub fn take(&mut self) -> Option<CursorMove> {

@@ -651,6 +651,15 @@ impl App {
             {
                 return false;
             }
+        } else if matches!(&event, WindowEvent::AxisMotion { axis: 0 | 1, .. })
+            && self.listen == Listen::Never
+            && self.windows.get(handle).is_some_and(|open| open.cursor_moves.holding_position())
+        {
+            // X11 reports duplicate absolute X/Y valuators after CursorMoved even
+            // with raw device events disabled. They must not flush an interior
+            // position and wake a GUI. Other axes and raw-input subscribers retain
+            // ordinary delivery, including the latest cursor before actual input.
+            return false;
         } else if let Some(open) = self.windows.get_mut(handle)
             && let Some(at) = open.cursor_moves.take()
         {
