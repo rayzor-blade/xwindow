@@ -38,7 +38,7 @@ use winit::monitor::{MonitorHandle, VideoModeHandle};
 #[cfg(not(target_os = "ios"))]
 use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{self as windows, WindowId};
-use xwindow_core::{Kind, Slab};
+use xwindow_core::{CursorMove, CursorMoves, Kind, Slab};
 
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::{
@@ -52,6 +52,7 @@ use crate::{
 struct Open {
     window: windows::Window,
     events: VecDeque<Event>,
+    cursor_moves: CursorMoves,
     sizing: ScaleSizing,
     /// What the program set: winit reads no title back on X11 and others.
     title: String,
@@ -430,9 +431,14 @@ impl ApplicationHandler for Host<'_> {
         self.app(|app| app.memory_warning(event_loop));
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        self.came = true;
-        self.app(|app| app.window_event(event_loop, id, event));
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let mut delivered = false;
+        self.app(|app| {
+            if let Some(&handle) = app.ids.get(&id) {
+                delivered = app.deliver(handle, event);
+            }
+        });
+        self.came |= delivered;
     }
 
     fn device_event(
@@ -637,7 +643,19 @@ impl State {
 
 impl App {
     /// Hands window `handle` a winit event, as winit does.
-    fn deliver(&mut self, handle: i32, mut event: WindowEvent) {
+    fn deliver(&mut self, handle: i32, mut event: WindowEvent) -> bool {
+        if let WindowEvent::CursorMoved { device_id, position } = &event {
+            let device_id = self.device(*device_id);
+            if let Some(open) = self.windows.get_mut(handle)
+                && open.cursor_moves.hold(position.x, position.y, device_id)
+            {
+                return false;
+            }
+        } else if let Some(open) = self.windows.get_mut(handle)
+            && let Some(at) = open.cursor_moves.take()
+        {
+            open.events.push_back(cursor_move(at));
+        }
         if let WindowEvent::ScaleFactorChanged {
             inner_size_writer, ..
         } = &mut event
@@ -658,7 +676,9 @@ impl App {
         let event = window_event(self, event);
         if let Some(open) = self.windows.get_mut(handle) {
             open.events.push_back(event);
+            return true;
         }
+        false
     }
 
     /// Each window's size, position and focus, to compare after a call.
@@ -711,6 +731,7 @@ impl App {
                     let handle = self.windows.put(Open {
                         window,
                         events: VecDeque::new(),
+                        cursor_moves: CursorMoves::default(),
                         sizing,
                         title,
                         pumped: false,
@@ -849,6 +870,10 @@ impl ApplicationHandler for App {
 }
 
 // -- events -----------------------------------------------------------------
+
+fn cursor_move(at: CursorMove) -> Event {
+    Event::CursorMoved { x: at.x, y: at.y, device_id: at.device_id }
+}
 
 // No fallback: a variant a newer winit adds fails to compile until it has
 // an event here.
@@ -1572,6 +1597,22 @@ pub unsafe fn window_wait(handle: i32, timeout: f64) -> Event {
         Instant::now() + Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX / 2)
     });
     with(Event::None, |l| l.next(handle, Some(deadline)))
+}
+
+pub unsafe fn window_coalesce_cursor_moves(handle: i32, left: f64, top: f64, right: f64, bottom: f64) {
+    with((), |l| {
+        if let Some(open) = l.app.windows.get_mut(handle) {
+            open.cursor_moves.region(left, top, right, bottom);
+        }
+    });
+}
+
+pub unsafe fn window_take_cursor_move(handle: i32) -> Event {
+    with(Event::None, |l| {
+        l.app.windows.get_mut(handle)
+            .and_then(|open| open.cursor_moves.take())
+            .map_or(Event::None, cursor_move)
+    })
 }
 
 /// Thread-safe, coalesced application wake. Never touches the thread-local window state.

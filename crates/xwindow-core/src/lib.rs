@@ -6,9 +6,11 @@
 
 mod cursor;
 mod handles;
+mod motion;
 mod keys;
 pub mod raw;
 
 pub use cursor::{CURSOR_ICONS, css as cursor_css};
 pub use handles::{Kind, Slab};
 pub use keys::{KEY_CODES, NAMED_KEYS};
+pub use motion::{CursorMove, CursorMoves};

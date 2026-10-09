@@ -407,6 +407,19 @@ trait Window {
     /// False when no native event loop is available (including web hosts).
     #[native(window_wake)]
     fn wake() -> bool;
+    /// Coalesce cursor moves inside a caller-guaranteed quiet rectangle in
+    /// physical pixels (left/top inclusive, right/bottom exclusive). No move
+    /// is queued there; only its latest position is retained. Crossing the
+    /// rectangle or receiving another window event resumes ordinary delivery.
+    /// Empty or non-finite bounds disable coalescing. Raw device events are
+    /// unaffected; applications using only window input can disable those.
+    #[native(window_coalesce_cursor_moves)]
+    fn coalesceCursorMoves(this: &Window, left: f64, top: f64, right: f64, bottom: f64);
+    /// Disable coalescing and take the latest retained CursorMoved, or None.
+    /// Call before changing hit geometry or processing application work.
+    /// Other window events automatically deliver that position first.
+    #[native(window_take_cursor_move)]
+    fn takeCursorMove(this: &Window) -> Event;
     /// Close the window; its handle names nothing after.
     #[native(window_close)]
     fn close(this: &Window);

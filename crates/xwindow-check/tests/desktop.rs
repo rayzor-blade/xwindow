@@ -171,6 +171,7 @@ impl Desktop {
         self.check("cursor icons", Self::cursor_icons);
         self.check("cursor image", Self::cursor_image);
         self.check("cursor position", Self::cursor_position);
+        self.check("quiet cursor moves stay in the native wait", Self::quiet_cursor_moves);
         self.check("cursor grab", Self::cursor_grab);
         self.check("set and get position", Self::position);
         self.check("fullscreen", Self::fullscreen);
@@ -947,6 +948,64 @@ impl Desktop {
                 if (ex - x).abs() <= 1.0 && (ey - y).abs() <= 1.0)
         })?;
         Ok(None)
+    }
+
+    fn quiet_cursor_moves(&mut self) -> Checked {
+        self.input()?;
+        self.focus(A)?;
+        self.point(A, 50.0, 50.0)?;
+        self.pump(QUIET);
+        let h = self.handle(A);
+        let scale = self.scale(A);
+        unsafe { native::window_listen_device_events(xwindow_check::DeviceEvents::Never.native()) };
+        let result = (|| {
+            let region = || unsafe { native::window_coalesce_cursor_moves(h, 20.0 * scale, 20.0 * scale, 140.0 * scale, 140.0 * scale) };
+            region();
+            for i in 0..32 { self.point(A, 60.0 + i as f64, 80.0)?; }
+            if self.external {
+                self.pump(Duration::from_millis(150));
+            } else {
+                let start = Instant::now();
+                let event = unsafe { native::window_wait(h, 0.15) };
+                if event != Event::None || start.elapsed() < Duration::from_millis(120) {
+                    return Err(format!("quiet moves ended the native wait: {event:?}, {:?}", start.elapsed()));
+                }
+            }
+            let at = unsafe { native::window_take_cursor_move(h) };
+            if !matches!(at, Event::CursorMoved { x, y, .. }
+                if (x - 91.0 * scale).abs() <= 2.0 * scale && (y - 80.0 * scale).abs() <= 2.0 * scale) {
+                return Err(format!("the retained position was {at:?}, expected (91,80)"));
+            }
+            // Crossing the right boundary delivers the new position normally.
+            region();
+            let marks = self.marks();
+            self.point(A, 160.0, 80.0)?;
+            self.expect(A, marks[A], "move across the quiet boundary", |e| {
+                matches!(e, Event::CursorMoved { x, .. } if (x - 160.0 * scale).abs() <= 2.0 * scale)
+            })?;
+            // A press sees the latest coalesced coordinates, before MouseInput.
+            self.point(A, 50.0, 50.0)?;
+            self.pump(QUIET);
+            region();
+            let marks = self.marks();
+            self.point(A, 100.0, 90.0)?;
+            self.pump(Duration::from_millis(80));
+            self.input()?.click()?;
+            self.expect(A, marks[A], "press after a coalesced move", |e| is_click(e, MouseElementState::Pressed))?;
+            self.expect(A, marks[A], "release after a coalesced move", |e| is_click(e, MouseElementState::Released))?;
+            let events = &self.wins[A].log[marks[A]..];
+            let press = events.iter().position(|e| is_click(e, MouseElementState::Pressed)).ok_or("missing press")?;
+            if !events[..press].iter().any(|e| matches!(e, Event::CursorMoved { x, y, .. }
+                if (x - 100.0 * scale).abs() <= 2.0 * scale && (y - 90.0 * scale).abs() <= 2.0 * scale)) {
+                return Err(format!("press did not follow the latest position: {events:?}"));
+            }
+            Ok(None)
+        })();
+        unsafe {
+            native::window_take_cursor_move(h);
+            native::window_listen_device_events(xwindow_check::DeviceEvents::WhenFocused.native());
+        }
+        result
     }
 
     fn cursor_grab(&mut self) -> Checked {

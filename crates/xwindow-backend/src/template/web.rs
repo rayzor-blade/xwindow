@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
-use xwindow_core::{Kind, Slab};
+use xwindow_core::{CursorMoves, Kind, Slab};
 
 use crate::runtime::{Buffer, ErrorKind, Text, host};
 use crate::wire::{self, Handle, Mailbox, Queue};
@@ -66,6 +66,7 @@ struct Page {
     commands: wire::Encoder,
     staged: Vec<Box<[u8]>>,
     events: VecDeque<Event>,
+    cursor_moves: CursorMoves,
     width: i32,
     height: i32,
     scale: f64,
@@ -97,6 +98,7 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         commands: wire::Encoder::new(),
         staged: Vec::new(),
         events: VecDeque::new(),
+        cursor_moves: CursorMoves::default(),
         width: 0,
         height: 0,
         scale: 1.0,
@@ -134,6 +136,11 @@ impl Page {
     fn drain(&mut self) {
         while let Some(record) = BLOCK.queue.take::<wire::XwEvent>(&self.ring) {
             if let Some(event) = self.event(record) {
+                if let Event::CursorMoved { x, y, device_id } = &event {
+                    if self.cursor_moves.hold(*x, *y, *device_id) { continue; }
+                } else if let Some(at) = self.cursor_moves.take() {
+                    self.events.push_back(Event::CursorMoved { x: at.x, y: at.y, device_id: at.device_id });
+                }
                 self.events.push_back(event);
             }
         }
@@ -698,6 +705,16 @@ pub unsafe fn window_wait(handle: i32, timeout: f64) -> Event {
         (timeout * 1e9).min(i64::MAX as f64) as i64
     };
     page().next(handle, Some(timeout))
+}
+
+pub unsafe fn window_coalesce_cursor_moves(handle: i32, left: f64, top: f64, right: f64, bottom: f64) {
+    with(handle, (), |p| p.cursor_moves.region(left, top, right, bottom));
+}
+
+pub unsafe fn window_take_cursor_move(handle: i32) -> Event {
+    with(handle, Event::None, |p| p.cursor_moves.take().map_or(Event::None, |at| {
+        Event::CursorMoved { x: at.x, y: at.y, device_id: at.device_id }
+    }))
 }
 
 /// The web host owns its event queue and has no native loop to wake.
