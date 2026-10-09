@@ -402,6 +402,11 @@ trait Window {
     /// timeout waits as long as it takes.
     #[native(window_wait)]
     fn wait(this: &Window, timeout: f64) -> Event;
+    /// Wake the current or next wait for application work, from any thread.
+    /// Several calls coalesce; no synthetic window event is produced.
+    /// False when no native event loop is available (including web hosts).
+    #[native(window_wake)]
+    fn wake() -> bool;
     /// Close the window; its handle names nothing after.
     #[native(window_close)]
     fn close(this: &Window);

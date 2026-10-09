@@ -700,6 +700,11 @@ pub unsafe fn window_wait(handle: i32, timeout: f64) -> Event {
     page().next(handle, Some(timeout))
 }
 
+/// The web host owns its event queue and has no native loop to wake.
+pub unsafe fn window_wake() -> bool {
+    false
+}
+
 /// A page's canvas cannot close: it is hidden, and polls nothing more.
 pub unsafe fn window_close(handle: i32) {
     with(handle, (), |p| {

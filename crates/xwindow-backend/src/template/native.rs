@@ -19,6 +19,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr::NonNull;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static WAKE_PROXY: OnceLock<winit::event_loop::EventLoopProxy<()>> = OnceLock::new();
+static WORK_PENDING: AtomicBool = AtomicBool::new(false);
 use std::time::{Duration, Instant};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -158,6 +163,7 @@ fn with<T>(miss: T, body: impl FnOnce(&mut Loop) -> T) -> T {
             #[cfg(not(target_os = "ios"))]
             match c_event_loop() {
                 Ok(events) => {
+                    let _ = WAKE_PROXY.set(events.create_proxy());
                     *slot = Some(Loop {
                         driver: Driver::Pumped(events),
                         app: App::new(),
@@ -212,6 +218,7 @@ pub enum Drive<'a> {
 /// `Drive::Pump` returns at once. `Drive::Turns` runs the loop and returns
 /// when it ends, which on iOS it never does.
 pub fn attach(events: EventLoop<()>, drive: Drive<'_>) -> Result<(), String> {
+    let proxy = events.create_proxy();
     let (driver, hosted) = match drive {
         #[cfg(not(target_os = "ios"))]
         Drive::Pump => (Driver::Pumped(events), None),
@@ -230,6 +237,7 @@ pub fn attach(events: EventLoop<()>, drive: Drive<'_>) -> Result<(), String> {
         });
         Ok(())
     })?;
+    let _ = WAKE_PROXY.set(proxy);
     match hosted {
         Some((events, turn)) => events
             .run_app(&mut Host {
@@ -274,18 +282,20 @@ fn pending(app: &App) -> bool {
 }
 
 pub fn external_pending() -> bool {
-    with(false, |l| pending(&l.app))
+    WORK_PENDING.load(Ordering::Acquire) || with(false, |l| pending(&l.app))
 }
 
 /// Wait for platform events once, or return immediately for events already
 /// queued. A proxy wake also returns, even if there is no window event to deliver.
 pub fn pump_external(timeout: Option<Duration>) -> bool {
     with(false, |l| {
-        if !pending(&l.app) {
+        let woke = WORK_PENDING.swap(false, Ordering::AcqRel);
+        if !woke && !pending(&l.app) {
             let asked = l.app.windows.iter().any(|(_, open)| open.redraw == Redraw::Asked);
             l.pump(if asked { Some(Duration::ZERO) } else { timeout });
         }
-        pending(&l.app)
+        let came = WORK_PENDING.swap(false, Ordering::AcqRel);
+        woke || came || pending(&l.app)
     })
 }
 
@@ -390,6 +400,11 @@ impl Host<'_> {
 }
 
 impl ApplicationHandler for Host<'_> {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ()) {
+        self.came = true;
+        self.app(|app| app.user_event(event_loop, event));
+    }
+
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: native::StartCause) {
         self.app(|app| {
             if let Some(listen) = LISTEN.take() {
@@ -538,6 +553,10 @@ impl Loop {
             return Event::None;
         }
         loop {
+            // Polling must not consume a wake intended for the next blocking wait.
+            if deadline.is_some() && WORK_PENDING.swap(false, Ordering::AcqRel) {
+                return Event::None;
+            }
             if let Some(open) = self.app.windows.get_mut(handle) {
                 if let Some(event) = open.events.pop_front() {
                     return event;
@@ -1553,6 +1572,16 @@ pub unsafe fn window_wait(handle: i32, timeout: f64) -> Event {
         Instant::now() + Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX / 2)
     });
     with(Event::None, |l| l.next(handle, Some(deadline)))
+}
+
+/// Thread-safe, coalesced application wake. Never touches the thread-local window state.
+pub unsafe fn window_wake() -> bool {
+    let Some(proxy) = WAKE_PROXY.get() else { return false; };
+    if !WORK_PENDING.swap(true, Ordering::AcqRel) && proxy.send_event(()).is_err() {
+        WORK_PENDING.store(false, Ordering::Release);
+        return false;
+    }
+    true
 }
 
 pub unsafe fn window_close(handle: i32) {

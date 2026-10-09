@@ -151,6 +151,7 @@ impl Desktop {
             "external pump blocks and wakes without input",
             Self::external_wait,
         );
+        self.check("application work wakes the event loop", Self::wake_work);
         self.check("windows report size, title and monitor", Self::describe);
         self.check("events go to the window they are for", Self::routed);
         self.check("Window.focus focuses the window", Self::backend_focus);
@@ -441,6 +442,75 @@ impl Desktop {
     /// Unlike the bounded polling helpers, exercise an actual blocking wait.
     /// Configure/focus events may finish asynchronously, so first find a quiet
     /// interval. The proxy then has to wake an unbounded wait without input.
+    fn wake_work(&mut self) -> Checked {
+        self.pump(QUIET);
+        // A wake is latched across polls and repeated requests coalesce.
+        for _ in 0..100 {
+            if !unsafe { native::window_wake() } {
+                return Err("wake refused with a live loop".into());
+            }
+        }
+        while !matches!(unsafe { native::window_poll(self.handle(A)) }, Event::None) {}
+        let start = Instant::now();
+        if self.external {
+            if !native::external_pending() || !native::pump_external(None) {
+                return Err("external pump lost pending application work".into());
+            }
+        } else {
+            unsafe { native::window_wait(self.handle(A), 2.0) };
+        }
+        if start.elapsed() > Duration::from_millis(500) {
+            return Err("work queued before wait did not wake promptly".into());
+        }
+        self.pump(QUIET);
+        let worker = std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(100));
+            unsafe { native::window_wake() }
+        });
+        let start = Instant::now();
+        if self.external {
+            while !native::pump_external(Some(Duration::from_secs(2))) {
+                if start.elapsed() > Duration::from_secs(2) {
+                    break;
+                }
+            }
+        } else {
+            // Ignore unrelated input; None is the wake without a synthetic event.
+            loop {
+                let event = unsafe { native::window_wait(self.handle(A), 2.0) };
+                if matches!(event, Event::None) {
+                    break;
+                }
+                self.wins[A].keep(event);
+                if start.elapsed() > Duration::from_secs(2) {
+                    break;
+                }
+            }
+        }
+        if !worker.join().map_err(|_| "wake thread panicked")? {
+            return Err("worker wake refused".into());
+        }
+        if start.elapsed() > Duration::from_millis(750) {
+            return Err("worker did not interrupt the wait".into());
+        }
+        self.pump(QUIET);
+        // An external pump may return for unrelated platform events. Drain those,
+        // then require an actual quiet wait rather than treating one as a spin.
+        for _ in 0..20 {
+            self.collect();
+            let start = Instant::now();
+            if self.external {
+                native::pump_external(Some(Duration::from_millis(150)));
+            } else {
+                unsafe { native::window_wait(self.handle(A), 0.15) };
+            }
+            if start.elapsed() >= Duration::from_millis(100) {
+                return Ok(None);
+            }
+        }
+        Err("consumed work kept the idle loop awake".into())
+    }
+
     fn external_wait(&mut self) -> Checked {
         if !self.external {
             return skip("requires XWINDOW_EXTERNAL_PUMP=1");
