@@ -34,7 +34,7 @@ jobs:
         with:
           haxe-version: 4.3.6
       - name: Linux window system headers
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libudev-dev
       - run: cargo test --workspace
       - run: cargo build -p xwindow-check --target wasm32-wasip1-threads
       - name: Generated Haxe compiles on both surfaces
@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev \
-            libxcursor1 libxrandr2 libxi6 xvfb x11-utils openbox xdotool
+            libxcursor1 libxrandr2 libxi6 libudev-dev xvfb x11-utils openbox xdotool
       - run: cargo build -p xwindow-check --tests
       - name: Desktop test under Xvfb and openbox
         run: |
@@ -73,7 +73,7 @@ jobs:
       - name: Compositor
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev sway
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libudev-dev sway
       - run: cargo build -p xwindow-check --tests
       - name: Desktop test under headless sway
         run: |
