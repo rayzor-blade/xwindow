@@ -1,0 +1,29 @@
+// W3C webref revision 89e7d68c6612fbedb740c1632d36e482ca39e999 (2026-09-22).
+// Complete HTML definitions extended by Gamepad; WHATWG licence.
+// Source: https://html.spec.whatwg.org/
+
+[Exposed=Window]
+interface Navigator {
+  // objects implementing this interface also implement the interfaces given below
+};
+
+interface mixin WindowEventHandlers {
+  attribute EventHandler onafterprint;
+  attribute EventHandler onbeforeprint;
+  attribute OnBeforeUnloadEventHandler onbeforeunload;
+  attribute EventHandler onhashchange;
+  attribute EventHandler onlanguagechange;
+  attribute EventHandler onmessage;
+  attribute EventHandler onmessageerror;
+  attribute EventHandler onoffline;
+  attribute EventHandler ononline;
+  attribute EventHandler onpagehide;
+  attribute EventHandler onpagereveal;
+  attribute EventHandler onpageshow;
+  attribute EventHandler onpageswap;
+  attribute EventHandler onpopstate;
+  attribute EventHandler onrejectionhandled;
+  attribute EventHandler onstorage;
+  attribute EventHandler onunhandledrejection;
+  attribute EventHandler onunload;
+};

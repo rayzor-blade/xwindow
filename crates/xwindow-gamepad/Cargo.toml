@@ -1,0 +1,13 @@
+[package]
+name = "xwindow-gamepad"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "Desktop controller input and rumble for xwindow adapters"
+
+[dependencies]
+xwindow-core.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "windows", target_os = "macos"))'.dependencies]
+gilrs = "0.11.2"

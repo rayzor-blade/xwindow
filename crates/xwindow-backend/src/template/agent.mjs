@@ -400,8 +400,74 @@ export function start({ memory, address, canvas }) {
   // The representations a write is gathering.
   let clipboardItems = [];
 
+
+  // Gamepad state is sampled on the page thread; a failed post is retried.
+  let gamepadsEnabled = false;
+  let gamepadSerial = 0;
+  const gamepads = new Map();
+  const disconnected = [];
+  const disconnectGamepad = (index) => {
+    const previous = gamepads.get(index);
+    if (previous) {
+      disconnected.push({ kind: "gamepad-disconnected", device: previous.device });
+      gamepads.delete(index);
+    }
+  };
+  globalThis.addEventListener("gamepaddisconnected", (event) => disconnectGamepad(event.gamepad.index));
+  // A slot may reconnect between samples; its next connection gets a new token.
+  globalThis.addEventListener("gamepadconnected", (event) => disconnectGamepad(event.gamepad.index));
+  const sampleGamepads = () => {
+    if (!gamepadsEnabled) return;
+    while (disconnected.length && post(disconnected[0])) disconnected.shift();
+    let pads;
+    try { pads = navigator.getGamepads(); } catch { return; }
+    const present = new Set();
+    for (const pad of pads) {
+      if (!pad || !pad.connected) continue;
+      present.add(pad.index);
+      let entry = gamepads.get(pad.index);
+      if (!entry) { entry = { device: ++gamepadSerial, last: "" }; gamepads.set(pad.index, entry); }
+      const standard = pad.mapping === "standard";
+      const buttons = standard ? pad.buttons.slice(0, 17) : [];
+      const record = {
+        kind: "gamepad-snapshot", device: entry.device, gamepadIndex: pad.index,
+        text: pad.id, gamepadButtons: buttons.map((b) => b.value),
+        gamepadAxes: standard ? Array.from(pad.axes).slice(0, 4) : [],
+        gamepadPressed: buttons.reduce((mask, b, i) => mask | (b.pressed ? 1 << i : 0), 0),
+        gamepadRumble: Boolean(pad.vibrationActuator?.playEffect &&
+          (!pad.vibrationActuator.effects || pad.vibrationActuator.effects.includes("dual-rumble"))),
+      };
+      const signature = JSON.stringify(record);
+      if (entry.last !== signature && post(record)) entry.last = signature;
+    }
+    for (const index of gamepads.keys()) if (!present.has(index)) disconnectGamepad(index);
+    while (disconnected.length && post(disconnected[0])) disconnected.shift();
+  };
+
   // XwAgent, which the program's commands call.
   const agent = {
+    enableGamepads: () => {
+      let available = typeof navigator.getGamepads === "function", error = "";
+      if (available) { try { navigator.getGamepads(); } catch (e) { available = false; error = String(e.message || e); } }
+      if (!available && !error) error = "The browser Gamepad API is unavailable";
+      gamepadsEnabled = available;
+      post({ kind: "gamepad-status", on: available, text: error });
+      sampleGamepads();
+    },
+    rumbleGamepad: (index, strong, weak, seconds) => {
+      let accepted = false;
+      try {
+        const pad = navigator.getGamepads()[index], actuator = pad?.vibrationActuator;
+        if (pad?.connected && actuator?.playEffect) {
+          const pending = seconds === 0 && actuator.reset ? actuator.reset() : actuator.playEffect("dual-rumble", {
+            duration: seconds * 1000, strongMagnitude: strong, weakMagnitude: weak,
+          });
+          pending?.catch(() => {});
+          accepted = true;
+        }
+      } catch {}
+      post({ kind: "gamepad-rumble", on: accepted });
+    },
     setSize: (w, h) => cssSize(w, h, "width", "height"),
     setMinSize: (w, h) => cssSize(w, h, "minWidth", "minHeight"),
     setMaxSize: (w, h) => cssSize(w, h, "maxWidth", "maxHeight"),
@@ -444,6 +510,7 @@ export function start({ memory, address, canvas }) {
   // A redraw the program asked for since the last frame is answered in this
   // one.
   const frame = () => {
+    sampleGamepads();
     const words = new Int32Array(memory.buffer, address + REDRAW, 1);
     if (Atomics.exchange(words, 0, 0) !== 0) post({ kind: "redraw-requested" });
     requestAnimationFrame(frame);

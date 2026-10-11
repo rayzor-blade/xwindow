@@ -16,7 +16,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use xwindow_core::{CursorMoves, Kind, Slab};
 
-use crate::runtime::{Buffer, ErrorKind, Text, host};
+use crate::runtime::{Buffer, BufferMut, ErrorKind, Text, host};
 use crate::wire::{self, Handle, Mailbox, Queue};
 use crate::{
     CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath, Ime, Key,
@@ -84,6 +84,12 @@ struct Page {
     no_devices: bool,
     /// Each `ClipboardItems`' types and bytes, until it is written.
     clipboard_items: Slab<Vec<(String, Box<[u8]>)>>,
+    gamepads: xwindow_core::gamepad::State,
+    gamepad_indices: std::collections::HashMap<usize,u32>,
+    gamepads_requested: bool,
+    gamepads_available: bool,
+    gamepads_error: String,
+    gamepad_rumble_accepted: bool,
     /// A paste the agent is still posting, and the last one posted whole,
     /// which the clipboard reads answer.
     pasting: Vec<(String, Vec<u8>)>,
@@ -113,6 +119,12 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         screen: (0, 0, String::new()),
         no_devices: false,
         clipboard_items: Slab::new(Kind::ClipboardItems),
+        gamepads: xwindow_core::gamepad::State::new(),
+        gamepad_indices: std::collections::HashMap::new(),
+        gamepads_requested: false,
+        gamepads_available: false,
+        gamepads_error: "Open a window to start the browser Gamepad API".into(),
+        gamepad_rumble_accepted: false,
         pasting: Vec::new(),
         pasted: Vec::new(),
     })
@@ -180,6 +192,22 @@ impl Page {
         let on = e.on.unwrap_or(false);
         let text = e.text.clone().unwrap_or_default();
         Some(match e.kind {
+            K::GamepadStatus => { self.gamepads_available=on; self.gamepads_error=text; return None; },
+            K::GamepadRumble => { self.gamepad_rumble_accepted=on; return None; },
+            K::GamepadDisconnected => {
+                let source=device_id as usize; self.gamepads.disconnect(source); self.gamepad_indices.remove(&source); return None;
+            },
+            K::GamepadSnapshot => {
+                if device_id<=0 { return None; }
+                let source=device_id as usize;
+                let buttons=e.gamepad_buttons.unwrap_or_default(); let axes=e.gamepad_axes.unwrap_or_default();
+                let count=buttons.len().min(17); let axis_count=axes.len().min(4);
+                self.gamepads.connect(source,text,(1<<count)-1,(1<<axis_count)-1,e.gamepad_rumble.unwrap_or(false));
+                self.gamepad_indices.insert(source,e.gamepad_index.unwrap_or(0));
+                for (i,value) in buttons.iter().take(17).enumerate() { self.gamepads.button(source,i,*value,e.gamepad_pressed.unwrap_or(0)&(1<<i)!=0); }
+                for (i,value) in axes.iter().take(4).enumerate() { self.gamepads.axis(source,i,*value); }
+                return None;
+            },
             K::Resized => {
                 self.width = e.width.unwrap_or(0) as i32;
                 self.height = e.height.unwrap_or(0) as i32;
@@ -1123,4 +1151,203 @@ pub unsafe fn video_mode_refresh_rate(_: i32) -> i32 {
 
 pub unsafe fn video_mode_monitor(_: i32) -> i32 {
     0
+}
+
+
+// -- gamepads -----------------------------------------------------------------
+fn gamepads() -> MutexGuard<'static, Page> {
+    let mut p = page();
+    if p.started && !p.gamepads_requested {
+        p.gamepads_requested = true;
+        p.commands.xw_agent_enable_gamepads(AGENT);
+        p.flush();
+    }
+    p.drain();
+    p
+}
+pub unsafe fn gamepad_available() -> bool {
+    gamepads().gamepads_available
+}
+pub unsafe fn gamepad_error() -> Text {
+    Text::new(&gamepads().gamepads_error)
+}
+pub unsafe fn gamepad_count() -> i32 {
+    gamepads().gamepads.devices.iter().count() as i32
+}
+pub unsafe fn gamepad_at(index: i32) -> i32 {
+    if index < 0 {
+        0
+    } else {
+        gamepads()
+            .gamepads
+            .devices
+            .iter()
+            .nth(index as usize)
+            .map_or(0, |(id, _)| id)
+    }
+}
+pub unsafe fn gamepad_from_id(id: i32) -> i32 {
+    if gamepads().gamepads.devices.get(id).is_some() {
+        id
+    } else {
+        0
+    }
+}
+pub unsafe fn gamepad_valid(id: i32) -> bool {
+    (unsafe { gamepad_from_id(id) }) != 0
+}
+pub unsafe fn gamepad_device_id(id: i32) -> i32 {
+    unsafe { gamepad_from_id(id) }
+}
+pub unsafe fn gamepad_name(id: i32) -> Text {
+    Text::new(
+        gamepads()
+            .gamepads
+            .devices
+            .get(id)
+            .map_or("", |d| d.name.as_str()),
+    )
+}
+pub unsafe fn gamepad_has_button(id: i32, button: i32) -> bool {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return false;
+    };
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .map_or(false, |d| d.buttons & (1 << (button as usize)) != 0)
+}
+pub unsafe fn gamepad_has_axis(id: i32, axis: i32) -> bool {
+    let Some(axis) = crate::GamepadAxis::from_native(axis) else {
+        return false;
+    };
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .map_or(false, |d| d.axes & (1 << (axis as usize)) != 0)
+}
+pub unsafe fn gamepad_button(id: i32, button: i32) -> f64 {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return 0.0;
+    };
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .map_or(0.0, |d| d.values[button as usize])
+}
+pub unsafe fn gamepad_pressed(id: i32, button: i32) -> bool {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return false;
+    };
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .map_or(false, |d| d.pressed & (1 << (button as usize)) != 0)
+}
+pub unsafe fn gamepad_axis(id: i32, axis: i32) -> f64 {
+    let Some(axis) = crate::GamepadAxis::from_native(axis) else {
+        return 0.0;
+    };
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .map_or(0.0, |d| d.sticks[axis as usize])
+}
+pub unsafe fn gamepad_snapshot(id: i32, output: BufferMut) -> bool {
+    if output.len() < xwindow_core::gamepad::SNAPSHOT_BYTES || output.as_mut_ptr().is_null() {
+        return false;
+    }
+    gamepads().gamepads.devices.get(id).is_some_and(|d| {
+        d.snapshot(unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) })
+    })
+}
+pub unsafe fn gamepad_rumble_supported(id: i32) -> bool {
+    gamepads()
+        .gamepads
+        .devices
+        .get(id)
+        .is_some_and(|d| d.rumble)
+}
+pub unsafe fn gamepad_rumble(id: i32, strong: f64, weak: f64, seconds: f64) -> bool {
+    if !xwindow_core::gamepad::rumble_valid(strong, weak, seconds) {
+        return false;
+    }
+    let mut p = gamepads();
+    let Some(device) = p.gamepads.devices.get(id) else {
+        return false;
+    };
+    if !device.rumble {
+        return false;
+    }
+    let Some(index) = p.gamepad_indices.get(&device.source).copied() else {
+        return false;
+    };
+    p.gamepad_rumble_accepted = false;
+    p.commands
+        .xw_agent_rumble_gamepad(AGENT, &index, &strong, &weak, &seconds);
+    p.flush();
+    p.drain();
+    p.gamepad_rumble_accepted
+}
+pub unsafe fn gamepad_drain(output: BufferMut) -> i32 {
+    if output.len() < xwindow_core::gamepad::EVENT_BYTES || output.as_mut_ptr().is_null() {
+        return 0;
+    }
+    gamepads()
+        .gamepads
+        .drain(unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) })
+        .min(i32::MAX as usize) as i32
+}
+pub unsafe fn gamepad_poll() -> crate::GamepadEvent {
+    use crate::{GamepadAxis as A, GamepadButton as B, GamepadEvent as G};
+    use xwindow_core::gamepad::Event as E;
+    const BUTTONS: [B; 17] = [
+        B::South,
+        B::East,
+        B::West,
+        B::North,
+        B::LeftShoulder,
+        B::RightShoulder,
+        B::LeftTrigger,
+        B::RightTrigger,
+        B::Select,
+        B::Start,
+        B::LeftStick,
+        B::RightStick,
+        B::DPadUp,
+        B::DPadDown,
+        B::DPadLeft,
+        B::DPadRight,
+        B::Guide,
+    ];
+    const AXES: [A; 4] = [A::LeftX, A::LeftY, A::RightX, A::RightY];
+    match gamepads().gamepads.poll() {
+        None => G::None,
+        Some(E::Connected(id)) => G::Connected { device_id: id },
+        Some(E::Disconnected(id)) => G::Disconnected { device_id: id },
+        Some(E::Button {
+            id,
+            button,
+            value,
+            pressed,
+        }) => G::Button {
+            device_id: id,
+            button: BUTTONS[button],
+            value,
+            pressed,
+        },
+        Some(E::Axis { id, axis, value }) => G::Axis {
+            device_id: id,
+            axis: AXES[axis],
+            value,
+        },
+        Some(E::Overflow(dropped)) => G::Overflow {
+            dropped: dropped.min(i64::MAX as u64) as i64,
+        },
+    }
 }

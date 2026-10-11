@@ -10,7 +10,11 @@ pub use x_idl::wire;
 pub const WINDOW_API: &str = include_str!("../../../api/window.api.rs");
 /// The browser APIs the page agent reaches, verbatim from W3C's webref.
 pub const WINDOW_IDL: &str = include_str!("../../../api/spec/window.idl");
-/// The page agent's own operations, and the event record it posts.
+/// HTML definitions extended by the browser gamepad specification.
+pub const GAMEPAD_HOST_IDL: &str = include_str!("../../../api/spec/gamepad-host.idl");
+/// Browser gamepad definitions, verbatim from W3C's webref.
+pub const GAMEPAD_IDL: &str = include_str!("../../../api/spec/gamepad.idl");
+/// The page agent's commands and event records.
 pub const AGENT_IDL: &str = include_str!("../../../api/spec/agent.idl");
 
 /// The namespace the API is exposed under: the Haxe package and Caribou's
@@ -32,7 +36,7 @@ pub enum Runtime {
 
 /// The browser wire's schema: the DOM's APIs and the agent's.
 pub fn browser_idl() -> String {
-    format!("{WINDOW_IDL}\n{AGENT_IDL}")
+    format!("{WINDOW_IDL}\n{GAMEPAD_HOST_IDL}\n{GAMEPAD_IDL}\n{AGENT_IDL}")
 }
 
 /// The complete declaration: `WINDOW_API` with `KeyCode`, `NamedKey` and

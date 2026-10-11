@@ -11,5 +11,6 @@ x_idl = { workspace = true }
 xwindow-core = { workspace = true }
 
 [dev-dependencies]
+serde_json = "1"
 xwindow-backend = { path = "../xwindow-backend" }
 syn = { version = "2", features = ["full"] }

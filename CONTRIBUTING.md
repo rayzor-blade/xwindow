@@ -90,7 +90,7 @@ with `install_scoped`):
   `hl_blocking`.
 
 The adapter depends on `xwindow-core`. Natively it also depends on `winit`
-0.30, `raw-window-handle` 0.6 and `xwindow-clipboard`, which reaches each
+0.30, `raw-window-handle` 0.6, `xwindow-gamepad` and `xwindow-clipboard`, which reaches each
 platform's clipboard through crates winit already links.
 `crates/xwindow-check` is the smallest working shape.
 

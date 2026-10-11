@@ -104,6 +104,21 @@ impl Buffer {
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 pub struct BufferMut(Buffer);
+impl BufferMut {
+    pub fn new(bytes: &[u8]) -> Self {
+        Self(Buffer::new(bytes))
+    }
+    pub fn len(&self) -> usize {
+        unsafe { self.0.as_slice().len() }
+    }
+    pub fn as_mut_ptr(&self) -> *mut u8 {
+        if self.0.0.is_null() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { (&mut *self.0.0).as_mut_ptr() }
+        }
+    }
+}
 
 #[repr(transparent)]
 pub struct Future<T = ()>(*mut u8, PhantomData<fn() -> T>);

@@ -140,3 +140,37 @@ mod tests {
         assert_eq!(unsafe { bytes.as_slice() }, [b'/', 255]);
     }
 }
+
+#[cfg(test)]
+mod gamepad_tests {
+    use super::*;
+    #[test]
+    fn generated_event_getters_preserve_named_controls() {
+        __XIDL_Gamepad_GamepadEvent.with(|slot| {
+            *slot.borrow_mut() = GamepadEvent::Button {
+                device_id: 123,
+                button: GamepadButton::LeftTrigger,
+                value: 0.25,
+                pressed: false,
+            };
+        });
+        assert_eq!(Gamepad::gamepadEventButtonDeviceId(), 123);
+        assert_eq!(
+            Gamepad::gamepadEventButtonButton().get(),
+            GamepadButton::LeftTrigger
+        );
+        assert_eq!(Gamepad::gamepadEventButtonValue(), 0.25);
+        assert!(!Gamepad::gamepadEventButtonPressed());
+    }
+    #[cfg(not(target_os = "wasi"))]
+    #[test]
+    fn native_snapshot_rejects_invalid_handles_without_writing() {
+        let out = runtime::BufferMut::new(&[99; 176]);
+        unsafe {
+            assert!(!backend::gamepad_snapshot(0, out));
+            assert!(!backend::gamepad_valid(0));
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(out.as_mut_ptr(), 176) };
+        assert_eq!(bytes, &[99; 176]);
+    }
+}

@@ -40,7 +40,7 @@ use winit::platform::pump_events::EventLoopExtPumpEvents;
 use winit::window::{self as windows, WindowId};
 use xwindow_core::{CursorMove, CursorMoves, Kind, Slab};
 
-use crate::runtime::{Buffer, ErrorKind, Text, host};
+use crate::runtime::{Buffer, BufferMut, ErrorKind, Text, host};
 use crate::{
     Attention, CursorGrab, CursorIcon, CursorRange, DeviceEvent, DeviceEvents, Event, FilePath,
     Ime, ImePurpose, Key, KeyCode, KeyEvent, KeyLocation, KeySupplement, Modifiers,
@@ -2647,4 +2647,139 @@ pub unsafe fn video_mode_refresh_rate(handle: i32) -> i32 {
 pub unsafe fn video_mode_monitor(handle: i32) -> i32 {
     let found = video_mode(handle, None, |m| Some(m.monitor()));
     with(0, |l| l.app.monitor(found))
+}
+
+
+// -- gamepads: one application-wide hub, independent of window queues -----------
+static GAMEPADS: std::sync::LazyLock<xwindow_gamepad::Hub> = std::sync::LazyLock::new(|| {
+    let _blocking = Blocking::new();
+    xwindow_gamepad::Hub::new(|| unsafe {
+        window_wake();
+    })
+});
+pub unsafe fn gamepad_available() -> bool {
+    GAMEPADS.available()
+}
+pub unsafe fn gamepad_error() -> Text {
+    Text::new(GAMEPADS.error())
+}
+pub unsafe fn gamepad_count() -> i32 {
+    GAMEPADS.count()
+}
+pub unsafe fn gamepad_at(index: i32) -> i32 {
+    GAMEPADS.at(index)
+}
+pub unsafe fn gamepad_from_id(id: i32) -> i32 {
+    GAMEPADS.read(id, 0, |_| id)
+}
+pub unsafe fn gamepad_valid(id: i32) -> bool {
+    GAMEPADS.read(id, false, |_| true)
+}
+pub unsafe fn gamepad_device_id(id: i32) -> i32 {
+    GAMEPADS.read(id, 0, |_| id)
+}
+pub unsafe fn gamepad_name(id: i32) -> Text {
+    Text::new(&GAMEPADS.read(id, String::new(), |d| d.name.clone()))
+}
+pub unsafe fn gamepad_has_button(id: i32, button: i32) -> bool {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return false;
+    };
+    GAMEPADS.read(id, false, |d| d.buttons & (1 << (button as usize)) != 0)
+}
+pub unsafe fn gamepad_has_axis(id: i32, axis: i32) -> bool {
+    let Some(axis) = crate::GamepadAxis::from_native(axis) else {
+        return false;
+    };
+    GAMEPADS.read(id, false, |d| d.axes & (1 << (axis as usize)) != 0)
+}
+pub unsafe fn gamepad_button(id: i32, button: i32) -> f64 {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return 0.0;
+    };
+    GAMEPADS.read(id, 0.0, |d| d.values[button as usize])
+}
+pub unsafe fn gamepad_pressed(id: i32, button: i32) -> bool {
+    let Some(button) = crate::GamepadButton::from_native(button) else {
+        return false;
+    };
+    GAMEPADS.read(id, false, |d| d.pressed & (1 << (button as usize)) != 0)
+}
+pub unsafe fn gamepad_axis(id: i32, axis: i32) -> f64 {
+    let Some(axis) = crate::GamepadAxis::from_native(axis) else {
+        return 0.0;
+    };
+    GAMEPADS.read(id, 0.0, |d| d.sticks[axis as usize])
+}
+pub unsafe fn gamepad_snapshot(id: i32, output: BufferMut) -> bool {
+    if output.len() < xwindow_core::gamepad::SNAPSHOT_BYTES || output.as_mut_ptr().is_null() {
+        return false;
+    }
+    GAMEPADS.read(id, false, |d| {
+        d.snapshot(unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) })
+    })
+}
+pub unsafe fn gamepad_rumble_supported(id: i32) -> bool {
+    GAMEPADS.read(id, false, |d| d.rumble)
+}
+pub unsafe fn gamepad_rumble(id: i32, strong: f64, weak: f64, seconds: f64) -> bool {
+    let hub = &*GAMEPADS;
+    let _blocking = Blocking::new();
+    hub.rumble(id, strong, weak, seconds)
+}
+pub unsafe fn gamepad_drain(output: BufferMut) -> i32 {
+    if output.len() < xwindow_core::gamepad::EVENT_BYTES || output.as_mut_ptr().is_null() {
+        return 0;
+    }
+    GAMEPADS
+        .drain(unsafe { std::slice::from_raw_parts_mut(output.as_mut_ptr(), output.len()) })
+        .min(i32::MAX as usize) as i32
+}
+pub unsafe fn gamepad_poll() -> crate::GamepadEvent {
+    use crate::{GamepadAxis as A, GamepadButton as B, GamepadEvent as G};
+    use xwindow_core::gamepad::Event as E;
+    const BUTTONS: [B; 17] = [
+        B::South,
+        B::East,
+        B::West,
+        B::North,
+        B::LeftShoulder,
+        B::RightShoulder,
+        B::LeftTrigger,
+        B::RightTrigger,
+        B::Select,
+        B::Start,
+        B::LeftStick,
+        B::RightStick,
+        B::DPadUp,
+        B::DPadDown,
+        B::DPadLeft,
+        B::DPadRight,
+        B::Guide,
+    ];
+    const AXES: [A; 4] = [A::LeftX, A::LeftY, A::RightX, A::RightY];
+    match GAMEPADS.poll() {
+        None => G::None,
+        Some(E::Connected(id)) => G::Connected { device_id: id },
+        Some(E::Disconnected(id)) => G::Disconnected { device_id: id },
+        Some(E::Button {
+            id,
+            button,
+            value,
+            pressed,
+        }) => G::Button {
+            device_id: id,
+            button: BUTTONS[button],
+            value,
+            pressed,
+        },
+        Some(E::Axis { id, axis, value }) => G::Axis {
+            device_id: id,
+            axis: AXES[axis],
+            value,
+        },
+        Some(E::Overflow(dropped)) => G::Overflow {
+            dropped: dropped.min(i64::MAX as u64) as i64,
+        },
+    }
 }

@@ -85,6 +85,10 @@ fn both_haxe_surfaces_have_the_same_classes() {
         "Event",
         "KeyCode",
         "Key",
+        "Gamepad",
+        "GamepadButton",
+        "GamepadAxis",
+        "GamepadEvent",
     ] {
         assert!(hashlink.contains(&format!("window/{class}.hx")), "{class}");
     }
@@ -96,4 +100,28 @@ fn both_haxe_surfaces_have_the_same_classes() {
         .source;
     assert!(window.contains("@:hlNative(\"xwindow\", \"window_poll_variant\")"));
     assert!(window.contains("public inline function poll():Event {"));
+}
+
+#[test]
+fn gamepads_are_declared_in_the_api_and_browser_idl() {
+    let idl = xwindow_bindgen::browser_idl();
+    assert!(idl.contains("sequence<Gamepad?> getGamepads()"));
+    assert!(idl.contains("undefined enableGamepads()"));
+    assert!(idl.contains("sequence<double> gamepadButtons"));
+    let wire = xwindow_bindgen::browser_wire().unwrap();
+    assert!(wire.rust.contains("pub fn xw_agent_enable_gamepads"));
+    assert!(wire.rust.contains("pub fn xw_agent_rumble_gamepad"));
+    for runtime in [haxe::Runtime::HashLink, haxe::Runtime::Rayzor] {
+        let files = xwindow_bindgen::haxe(runtime).unwrap();
+        let pad = &files
+            .iter()
+            .find(|f| f.path == "window/Gamepad.hx")
+            .unwrap()
+            .source;
+        assert!(pad.contains("snapshot(output:haxe.io.Bytes):Bool"), "{pad}");
+        assert!(
+            pad.contains("rumble(strong:Float, weak:Float, seconds:Float):Bool"),
+            "{pad}"
+        );
+    }
 }

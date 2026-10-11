@@ -213,3 +213,105 @@ fn run(dir: &Path, command: &mut Command) -> String {
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
+
+const GAMEPAD_PROGRAM: &str = r#"
+#[allow(dead_code,non_camel_case_types,clippy::all)] mod wire {include!("wire.rs");}
+use wire::*;
+use std::sync::atomic::Ordering::SeqCst;
+fn main() {
+ let mode=std::env::args().nth(1).unwrap();
+ if mode=="encode" {
+  let mut e=Encoder::new(); e.xw_agent_enable_gamepads(Handle(5)); std::fs::write("batch.bin",&e.bytes).unwrap();
+  let mut e=Encoder::new(); e.xw_agent_rumble_gamepad(Handle(5),&3,&0.75,&0.25,&0.125); std::fs::write("rumble.bin",&e.bytes).unwrap(); return;
+ }
+ let memory=std::fs::read("memory.bin").unwrap();
+ let word=|at:usize|u32::from_le_bytes(memory[at..at+4].try_into().unwrap());
+ let q=Queue::new(); q.tail.store(word(24) as i32,SeqCst);q.head.store(word(28),SeqCst);q.capacity.store(word(36),SeqCst);
+ let ring=&memory[word(32) as usize..][..word(36) as usize];
+ while let Some(e)=q.take::<XwEvent>(ring) {
+  match e.kind {
+   XwEventKind::GamepadStatus=>println!("status {:?}",e.on),
+   XwEventKind::GamepadSnapshot=>println!("snapshot {:?} {:?} {:?} {:?} {:?} {:?}",e.device,e.gamepad_index,e.gamepad_buttons,e.gamepad_axes,e.gamepad_pressed,e.gamepad_rumble),
+   XwEventKind::GamepadDisconnected=>println!("disconnect {:?}",e.device),
+   XwEventKind::GamepadRumble=>println!("rumble {:?}",e.on),
+   _=>(),
+  }
+ }
+}
+"#;
+
+#[test]
+fn gamepad_samples_and_rumble_cross_the_declared_wire() {
+    let wire = xwindow_bindgen::browser_wire().unwrap();
+    let dir = std::env::temp_dir().join(format!("xwindow-gamepads-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wire.rs"), &wire.rust).unwrap();
+    std::fs::write(dir.join(xwindow_backend::WIRE_MODULE), &wire.js).unwrap();
+    std::fs::write(
+        dir.join(xwindow_backend::AGENT_MODULE),
+        xwindow_backend::AGENT,
+    )
+    .unwrap();
+    std::fs::write(dir.join("program.rs"), GAMEPAD_PROGRAM).unwrap();
+    run(
+        &dir,
+        Command::new("rustc").args(["--edition=2024", "program.rs", "-o", "program"]),
+    );
+    run(&dir, Command::new(dir.join("program")).arg("encode"));
+    let setup = &HARNESS[..HARNESS.find("fire(\"pointermove\"").unwrap()];
+    let harness = format!(
+        "{setup}\n{}",
+        r#"
+const calls=[];
+const actuator={ effects:["dual-rumble"],playEffect:(type,params)=>{calls.push({type,params});return Promise.resolve("complete");} };
+const makePad=()=>({index:3,connected:true,id:"test pad",mapping:"standard",axes:[0.125,-0.5,0,0],buttons:Array.from({length:17},(_,i)=>({value:i===6?0.25:0,pressed:false})),vibrationActuator:actuator});
+let pad=makePad(); navigator.getGamepads=()=>[null,null,null,pad];
+const batch=async(file)=> {
+ const bytes=readFileSync(file);new Uint8Array(memory.buffer,1<<17,bytes.length).set(bytes);words.set([1<<17,bytes.length],2);
+ const serial=Atomics.add(words,0,1)+1;Atomics.notify(words,0);
+ while(Atomics.load(words,1)!==serial) await new Promise(r=>setTimeout(r,1));
+};
+await batch("batch.bin");
+pad.buttons[0]={value:1,pressed:true};pad.axes[1]=0.375;
+await new Promise(r=>setTimeout(r,10));
+await batch("rumble.bin");
+pad.connected=false;page.dispatchEvent(Object.assign(new Event("gamepaddisconnected"),{gamepad:pad}));
+await new Promise(r=>setTimeout(r,10));
+pad=makePad();page.dispatchEvent(Object.assign(new Event("gamepadconnected"),{gamepad:pad}));
+await new Promise(r=>setTimeout(r,10));
+const unmapped={...makePad(),index:5,id:"unmapped pad",mapping:"",vibrationActuator:null};
+navigator.getGamepads=()=>[null,null,null,pad,null,unmapped];
+await new Promise(r=>setTimeout(r,10));
+writeFileSync("memory.bin",new Uint8Array(memory.buffer));console.log(JSON.stringify(calls));process.exit(0);
+"#
+    );
+    std::fs::write(dir.join("harness.mjs"), harness).unwrap();
+    let output = run(&dir, Command::new("node").arg("harness.mjs"));
+    let calls: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+    assert_eq!(
+        calls,
+        serde_json::json!([{"type":"dual-rumble","params":{"duration":125,"strongMagnitude":0.75,"weakMagnitude":0.25}}])
+    );
+    let events = run(&dir, Command::new(dir.join("program")).arg("decode"));
+    assert!(events.contains("status Some(true)"), "{events}");
+    assert!(
+        events.contains("snapshot Some(1) Some(3) Some([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.25"),
+        "{events}"
+    );
+    assert!(
+        events.contains("Some([0.125, -0.5, 0.0, 0.0]) Some(0) Some(true)"),
+        "{events}"
+    );
+    assert!(
+        events.contains("Some([0.125, 0.375, 0.0, 0.0]) Some(1) Some(true)"),
+        "{events}"
+    );
+    assert!(events.contains("rumble Some(true)"), "{events}");
+    assert!(events.contains("disconnect Some(1)"), "{events}");
+    assert!(events.contains("snapshot Some(2) Some(3)"), "{events}");
+    assert!(
+        events.contains("snapshot Some(3) Some(5) Some([]) Some([]) Some(0) Some(false)"),
+        "{events}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

@@ -143,3 +143,11 @@ step.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout, the adapter boundary
 and the validation commands.
+
+
+## Controllers
+
+`window.Gamepad` exposes controllers through the same generated API in every
+runtime. Native adapters link `xwindow-gamepad`; a browser uses the Gamepad
+API on the page's thread. See [Gamepads](docs/gamepads.md) for connection
+handles, standard-layout controls, reusable snapshots and rumble.

@@ -18,6 +18,7 @@ pub enum Kind {
     Monitor = 2,
     VideoMode = 3,
     ClipboardItems = 4,
+    Gamepad = 5,
 }
 
 /// Live objects of one kind.
@@ -72,7 +73,10 @@ impl<T> Slab<T> {
     pub fn remove(&mut self, handle: i32) -> Option<T> {
         let slot = self.slot(handle)?;
         let value = self.objects[slot].take()?;
-        self.free.push(slot);
+        // Retire exhausted slots so old handles can never name a later object.
+        if self.generations[slot] < GEN_MASK {
+            self.free.push(slot);
+        }
         Some(value)
     }
 

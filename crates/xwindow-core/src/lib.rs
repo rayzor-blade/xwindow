@@ -5,9 +5,10 @@
 //! four integers (`raw`), which xgpu's `GpuInstance.surface` takes.
 
 mod cursor;
+pub mod gamepad;
 mod handles;
-mod motion;
 mod keys;
+mod motion;
 pub mod raw;
 
 pub use cursor::{CURSOR_ICONS, css as cursor_css};

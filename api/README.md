@@ -19,6 +19,17 @@ values it can encode. The program uses two directly:
 - `Document.title`
 - `CSSStyleDeclaration.setProperty`, for the cursor
 
+## `spec/gamepad.idl`
+
+`gamepad-host.idl` supplies the complete HTML `Navigator` and
+`WindowEventHandlers` definitions that Gamepad extends. Both files use the
+same revision and preserve the upstream definitions.
+
+The complete Gamepad definitions from the same W3C webref revision as
+`window.idl`, including enumeration, buttons, sticks and haptic operations.
+The agent samples these browser objects; its own commands and complete
+snapshot records are carried by `agent.idl`.
+
 ## `spec/agent.idl`
 
 xwindow's own definitions, which the wire carries beside the DOM's:

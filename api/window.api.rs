@@ -656,3 +656,109 @@ trait VideoMode {
     #[native(video_mode_monitor)]
     fn monitor(this: &VideoMode) -> Box<Monitor>;
 }
+
+/// Positional buttons in the W3C standard gamepad layout; trigger values are analog.
+enum GamepadButton {
+    South,
+    East,
+    West,
+    North,
+    LeftShoulder,
+    RightShoulder,
+    LeftTrigger,
+    RightTrigger,
+    Select,
+    Start,
+    LeftStick,
+    RightStick,
+    DPadUp,
+    DPadDown,
+    DPadLeft,
+    DPadRight,
+    Guide,
+}
+
+/// Stick values in [-1,1], with positive Y pointing down. No application dead zone.
+enum GamepadAxis {
+    LeftX,
+    LeftY,
+    RightX,
+    RightY,
+}
+
+/// One application-wide queue, independent of window event queues.
+enum GamepadEvent {
+    None,
+    Connected {
+        device_id: i32,
+    },
+    Disconnected {
+        device_id: i32,
+    },
+    Button {
+        device_id: i32,
+        button: Enum<GamepadButton>,
+        value: f64,
+        pressed: bool,
+    },
+    Axis {
+        device_id: i32,
+        axis: Enum<GamepadAxis>,
+        value: f64,
+    },
+    /// Events lost because a program did not drain the bounded queue; resample snapshots.
+    Overflow {
+        dropped: i64,
+    },
+}
+
+/// A connection-scoped controller handle; reconnecting invalidates the old handle.
+trait Gamepad {
+    /// Whether the platform backend initialized, including when no controllers are connected.
+    #[native(gamepad_available)]
+    fn available() -> bool;
+    /// Why the backend is unavailable, or an empty string.
+    #[native(gamepad_error)]
+    fn error() -> Text;
+    #[native(gamepad_count)]
+    fn count() -> i32;
+    /// A connected controller in enumeration order, or an invalid handle.
+    #[native(gamepad_at)]
+    fn at(index: i32) -> Box<Gamepad>;
+    #[native(gamepad_from_id)]
+    fn fromId(device_id: i32) -> Box<Gamepad>;
+    #[native(gamepad_poll)]
+    fn poll() -> GamepadEvent;
+    /// Drain whole 32-byte records into reused storage without constructing event objects.
+    /// u32 kind, i32 device, u32 control, u32 pressed, f64 value, u64 dropped.
+    /// Kinds match GamepadEvent variants. Returns count; a short buffer consumes nothing.
+    #[native(gamepad_drain)]
+    fn drain(output: BufferMut) -> i32;
+    #[native(gamepad_valid)]
+    fn valid(this: &Gamepad) -> bool;
+    #[native(gamepad_device_id)]
+    fn deviceId(this: &Gamepad) -> i32;
+    #[native(gamepad_name)]
+    fn name(this: &Gamepad) -> Text;
+    #[native(gamepad_has_button)]
+    fn hasButton(this: &Gamepad, button: Enum<GamepadButton>) -> bool;
+    #[native(gamepad_has_axis)]
+    fn hasAxis(this: &Gamepad, axis: Enum<GamepadAxis>) -> bool;
+    #[native(gamepad_button)]
+    fn button(this: &Gamepad, button: Enum<GamepadButton>) -> f64;
+    #[native(gamepad_pressed)]
+    fn pressed(this: &Gamepad, button: Enum<GamepadButton>) -> bool;
+    #[native(gamepad_axis)]
+    fn axis(this: &Gamepad, axis: Enum<GamepadAxis>) -> f64;
+    /// Atomically copy into a reused 176-byte buffer: 17 little-endian f64 button
+    /// values, 4 f64 axes, a u32 pressed mask and a u32 change sequence.
+    /// False for an invalid handle or short buffer; no bytes are written then.
+    #[native(gamepad_snapshot)]
+    fn snapshot(this: &Gamepad, output: BufferMut) -> bool;
+    #[native(gamepad_rumble_supported)]
+    fn rumbleSupported(this: &Gamepad) -> bool;
+    /// Start or replace finite dual-motor rumble; zero duration stops it.
+    /// Magnitudes are [0,1], seconds [0,5]. Reports backend acceptance.
+    #[native(gamepad_rumble)]
+    fn rumble(this: &Gamepad, strong: f64, weak: f64, seconds: f64) -> bool;
+}

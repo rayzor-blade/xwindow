@@ -17,6 +17,7 @@ xwindow-bindgen = { path = "../xwindow-bindgen" }
 
 [dependencies]
 xwindow-core = { workspace = true }
+xwindow-gamepad = { path = "../xwindow-gamepad" }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 winit = "0.30"

@@ -15,7 +15,8 @@ enum XwEventKind {
   "modifiers-changed", "ime-enabled", "ime-preedit", "ime-commit",
   "ime-disabled", "hovered-file", "dropped-file", "hovered-file-cancelled",
   "touch", "pinch-gesture", "touchpad-pressure", "mouse-motion", "suspended",
-  "resumed", "fullscreen-changed", "screen", "paste-data", "paste"
+  "resumed", "fullscreen-changed", "screen", "paste-data", "paste",
+  "gamepad-status", "gamepad-snapshot", "gamepad-disconnected", "gamepad-rumble"
 };
 
 // One event; which members it has depends on its kind. Positions and sizes
@@ -58,6 +59,12 @@ dictionary XwEvent {
   // PointerEvent.pressure, and a touchpad's click stage.
   double pressure;
   long stage;
+  // A browser gamepad slot and its complete standard-layout snapshot.
+  unsigned long gamepadIndex;
+  sequence<double> gamepadButtons;
+  sequence<double> gamepadAxes;
+  unsigned long gamepadPressed;
+  boolean gamepadRumble;
 };
 
 // The agent itself, at handle 5. Sizes are CSS pixels; zero leaves a
@@ -78,4 +85,6 @@ interface XwAgent {
   undefined writeClipboard(DOMString text);
   undefined clipboardItem(DOMString type, Uint8Array bytes);
   undefined writeClipboardItems();
+  undefined enableGamepads();
+  undefined rumbleGamepad(unsigned long index, double strong, double weak, double seconds);
 };
