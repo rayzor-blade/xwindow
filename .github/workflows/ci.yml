@@ -63,7 +63,7 @@ jobs:
           for i in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
           openbox &
           sleep 1
-          XWINDOW_DESKTOP=1 cargo test -p xwindow-check --test desktop
+          XWINDOW_DESKTOP=1 XWINDOW_DESKTOP_TRACE=1 cargo test -p xwindow-check --test desktop
 
   desktop-wayland:
     runs-on: ubuntu-latest

@@ -624,6 +624,19 @@ impl Desktop {
         if self.platform == Platform::Wayland {
             return skip("winit cannot focus a window on Wayland; the compositor does");
         }
+        if self.platform == Platform::X11 {
+            // Neither new window is guaranteed to start focused. Exercise that
+            // state deliberately rather than relying on the window manager's
+            // timing when it maps the two windows.
+            run("xdotool", &["windowfocus", "0"])?;
+            self.pump(QUIET);
+            if [A, B]
+                .into_iter()
+                .any(|w| unsafe { native::window_has_focus(self.handle(w)) })
+            {
+                return Err("a window kept focus after clearing X11 input focus".into());
+            }
+        }
         // Starting with the window that lacks focus, so each focus is a change.
         let order = if unsafe { native::window_has_focus(self.handle(B)) } {
             [(A, B), (B, A)]
