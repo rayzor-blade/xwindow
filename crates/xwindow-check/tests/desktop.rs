@@ -624,13 +624,61 @@ impl Desktop {
         if self.platform == Platform::Wayland {
             return skip("winit cannot focus a window on Wayland; the compositor does");
         }
-        // Starting with the window that lacks focus, so each focus is a change.
-        let order = if unsafe { native::window_has_focus(self.handle(B)) } {
-            [(A, B), (B, A)]
+        let outside = if self.platform == Platform::X11 {
+            // Neither new window is guaranteed to start focused. Exercise that
+            // state with another window holding focus: Openbox may restore
+            // focus immediately when XSetInputFocus is set to None.
+            let mut attributes = WindowAttributes::new();
+            WindowAttributes::title(&mut attributes, Text::new("xwindow-desktop-outside-focus"));
+            WindowAttributes::width(&mut attributes, 160);
+            WindowAttributes::height(&mut attributes, 120);
+            WindowAttributes::x(&mut attributes, 850);
+            WindowAttributes::y(&mut attributes, 400);
+            WindowAttributes::visible(&mut attributes, true);
+            let handle = unsafe { native::window_open(&attributes) };
+            if handle == 0 {
+                return Err("outside focus window did not open".into());
+            }
+            // External pumping requires draining every managed window's
+            // queue, including this temporary focus holder.
+            let index = self.wins.len();
+            self.wins.push(Win {
+                handle,
+                name: "outside",
+                title: "xwindow-desktop-outside-focus",
+                open: true,
+                log: Vec::new(),
+                frame: None,
+                color: 0,
+            });
+            Some(index)
         } else {
-            [(B, A), (A, B)]
+            None
         };
-        for (w, other) in order {
+        let result = self.focus_transitions(outside);
+        if let Some(index) = outside {
+            unsafe { native::window_close(self.handle(index)) };
+            self.wins.pop();
+        }
+        result
+    }
+
+    fn focus_transitions(&mut self, outside: Option<usize>) -> Checked {
+        if let Some(outside) = outside {
+            self.focus(outside)?;
+            if [A, B]
+                .into_iter()
+                .any(|w| unsafe { native::window_has_focus(self.handle(w)) })
+            {
+                return Err("A or B has focus while the outside window is focused".into());
+            }
+            println!("desktop: X11 focus starts outside A and B");
+        }
+        // A window can lose focus only if it had focus. New windows need not
+        // have been activated, so establish A's focus before checking both
+        // transitions through the backend (even if neither started focused).
+        self.focus(A)?;
+        for (w, other) in [(B, A), (A, B)] {
             let marks = self.marks();
             unsafe { native::window_focus(self.handle(w)) };
             self.expect(w, marks[w], "Focused(true)", |e| {
@@ -645,6 +693,12 @@ impl Desktop {
             self.expect(other, marks[other], "Focused(false)", |e| {
                 matches!(e, Event::Focused { focused: false })
             })?;
+            if unsafe { native::window_has_focus(self.handle(other)) } {
+                return Err(format!(
+                    "window {} still has focus after Focused(false)",
+                    self.wins[other].name
+                ));
+            }
         }
         Ok(None)
     }

@@ -243,8 +243,14 @@ haxe -cp /tmp/xwindow-ash -cp examples/events -main Main -hl /tmp/events.hl
 windows and drives them with synthetic input. It drives X11 with xdotool,
 sway and GNOME on Wayland, Windows, and macOS through Quartz events, which
 need the Accessibility permission for the terminal; CI runs it on X11,
-sway and Windows. The macOS run moves the pointer and types into its
-windows, so keep the mouse and keyboard still while it runs. With Stage
+sway and Windows. On Linux, `xvfb-run -a bash scripts/test-x11.sh` starts a
+private Openbox session, waits for its window-manager readiness property,
+and checks ordinary and external event pumping. It retains event traces and
+the Openbox log in `target/desktop-x11`. The X11 focus check deliberately
+starts with neither window focused, establishes A's focus, and then requires
+focus gain and loss events for both A-to-B and B-to-A transitions. The macOS
+run moves the pointer and types into its windows, so keep the mouse and
+keyboard still while it runs. With Stage
 Manager on and another app in front, a new window waits in the side strip
 as a small tilted thumbnail until it is clicked, which input aimed at it
 misses. On a machine with GNOME, `scripts/gnome_session.py` runs it in a
