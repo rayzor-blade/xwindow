@@ -54,16 +54,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev \
-            libxcursor1 libxrandr2 libxi6 libudev-dev xvfb x11-utils openbox xdotool
+            libxcursor1 libxrandr2 libxi6 libudev-dev xvfb xauth x11-utils openbox xdotool
       - run: cargo build -p xwindow-check --tests
       - name: Desktop test under Xvfb and openbox
-        run: |
-          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
-          export DISPLAY=:99
-          for i in $(seq 50); do xdpyinfo >/dev/null 2>&1 && break; sleep 0.1; done
-          openbox &
-          sleep 1
-          XWINDOW_DESKTOP=1 XWINDOW_DESKTOP_TRACE=1 cargo test -p xwindow-check --test desktop
+        run: xvfb-run -a -s '-screen 0 1280x1024x24 -nolisten tcp' bash scripts/test-x11.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-x11-diagnostics
+          path: target/desktop-x11
+          if-no-files-found: ignore
 
   desktop-wayland:
     runs-on: ubuntu-latest

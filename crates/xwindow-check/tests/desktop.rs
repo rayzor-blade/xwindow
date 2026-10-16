@@ -637,13 +637,11 @@ impl Desktop {
                 return Err("a window kept focus after clearing X11 input focus".into());
             }
         }
-        // Starting with the window that lacks focus, so each focus is a change.
-        let order = if unsafe { native::window_has_focus(self.handle(B)) } {
-            [(A, B), (B, A)]
-        } else {
-            [(B, A), (A, B)]
-        };
-        for (w, other) in order {
+        // A window can lose focus only if it had focus. New windows need not
+        // have been activated, so establish A's focus before checking both
+        // transitions through the backend (even if neither started focused).
+        self.focus(A)?;
+        for (w, other) in [(B, A), (A, B)] {
             let marks = self.marks();
             unsafe { native::window_focus(self.handle(w)) };
             self.expect(w, marks[w], "Focused(true)", |e| {
@@ -658,6 +656,12 @@ impl Desktop {
             self.expect(other, marks[other], "Focused(false)", |e| {
                 matches!(e, Event::Focused { focused: false })
             })?;
+            if unsafe { native::window_has_focus(self.handle(other)) } {
+                return Err(format!(
+                    "window {} still has focus after Focused(false)",
+                    self.wins[other].name
+                ));
+            }
         }
         Ok(None)
     }
