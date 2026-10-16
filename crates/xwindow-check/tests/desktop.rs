@@ -99,6 +99,15 @@ struct Win {
     color: u32,
 }
 
+/// Keeps the initial focus outside A/B during the X11 regression check.
+struct OutsideFocus(i32);
+
+impl Drop for OutsideFocus {
+    fn drop(&mut self) {
+        unsafe { native::window_close(self.0) };
+    }
+}
+
 impl Win {
     fn keep(&mut self, event: Event) {
         if std::env::var_os(TRACE).is_some() {
@@ -624,19 +633,39 @@ impl Desktop {
         if self.platform == Platform::Wayland {
             return skip("winit cannot focus a window on Wayland; the compositor does");
         }
-        if self.platform == Platform::X11 {
+        let _outside = if self.platform == Platform::X11 {
             // Neither new window is guaranteed to start focused. Exercise that
-            // state deliberately rather than relying on the window manager's
-            // timing when it maps the two windows.
-            run("xdotool", &["windowfocus", "0"])?;
-            self.pump(QUIET);
-            if [A, B]
-                .into_iter()
-                .any(|w| unsafe { native::window_has_focus(self.handle(w)) })
-            {
-                return Err("a window kept focus after clearing X11 input focus".into());
+            // state with another window holding focus: Openbox may restore
+            // focus immediately when XSetInputFocus is set to None.
+            let mut attributes = WindowAttributes::new();
+            WindowAttributes::title(&mut attributes, Text::new("xwindow-desktop-outside-focus"));
+            WindowAttributes::width(&mut attributes, 160);
+            WindowAttributes::height(&mut attributes, 120);
+            WindowAttributes::x(&mut attributes, 850);
+            WindowAttributes::y(&mut attributes, 400);
+            WindowAttributes::visible(&mut attributes, true);
+            let handle = unsafe { native::window_open(&attributes) };
+            if handle == 0 {
+                return Err("outside focus window did not open".into());
             }
-        }
+            let outside = OutsideFocus(handle);
+            unsafe { native::window_focus(handle) };
+            let end = Instant::now() + PATIENCE;
+            while !unsafe { native::window_has_focus(handle) }
+                || [A, B]
+                    .into_iter()
+                    .any(|w| unsafe { native::window_has_focus(self.handle(w)) })
+            {
+                if Instant::now() >= end {
+                    return Err("could not focus outside A and B".into());
+                }
+                self.pump(Duration::from_millis(50));
+            }
+            println!("desktop: X11 focus starts outside A and B");
+            Some(outside)
+        } else {
+            None
+        };
         // A window can lose focus only if it had focus. New windows need not
         // have been activated, so establish A's focus before checking both
         // transitions through the backend (even if neither started focused).
