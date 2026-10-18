@@ -1363,6 +1363,11 @@ fn attributes(a: &WindowAttributes) -> windows::WindowAttributes {
             Ok(icon) => out = out.with_window_icon(icon),
             Err(error) => host::raise(ErrorKind::Type, &error),
         }
+        application_icon(
+            unsafe { rgba.as_slice() },
+            a.iconWidth.unwrap_or(0),
+            a.iconHeight.unwrap_or(0),
+        );
     }
     if let Some(size) = limit(
         a.resizeIncrementWidth.unwrap_or(0),
@@ -1384,6 +1389,14 @@ fn native_theme(theme: Theme) -> windows::Theme {
     match theme {
         Theme::Light => windows::Theme::Light,
         Theme::Dark => windows::Theme::Dark,
+    }
+}
+
+/// The icon of the application, where a platform has one for the program and not for its windows, as macOS does in the Dock. It is
+/// the window's icon again, so a bad icon has been reported already, and where it cannot be set the window's is still there.
+fn application_icon(rgba: &[u8], width: i32, height: i32) {
+    if let (Ok(width), Ok(height)) = (u32::try_from(width), u32::try_from(height)) {
+        let _ = xwindow_appicon::set(rgba, width, height);
     }
 }
 
@@ -2256,6 +2269,7 @@ pub unsafe fn window_set_icon(handle: i32, rgba: Buffer, width: i32, height: i32
         Ok(icon) => window(handle, (), |w| w.set_window_icon(icon)),
         Err(error) => host::raise(ErrorKind::Type, &error),
     }
+    application_icon(unsafe { rgba.as_slice() }, width, height);
 }
 
 pub unsafe fn window_set_resize_increments(handle: i32, width: i32, height: i32) {

@@ -90,8 +90,9 @@ with `install_scoped`):
   `hl_blocking`.
 
 The adapter depends on `xwindow-core`. Natively it also depends on `winit`
-0.30, `raw-window-handle` 0.6, `xwindow-gamepad` and `xwindow-clipboard`, which reaches each
-platform's clipboard through crates winit already links.
+0.30, `raw-window-handle` 0.6, `xwindow-gamepad`, `xwindow-clipboard`, which reaches each
+platform's clipboard through crates winit already links, and `xwindow-appicon`, which sets the icon
+macOS shows in the Dock (a window has none there) and does nothing elsewhere.
 `crates/xwindow-check` is the smallest working shape.
 
 Per runtime:

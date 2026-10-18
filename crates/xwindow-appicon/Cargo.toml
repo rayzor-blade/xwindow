@@ -1,0 +1,18 @@
+[package]
+name = "xwindow-appicon"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+description = "The application's icon, which macOS shows in the Dock, for xwindow's native backend"
+
+# winit gives a window an icon on the platforms where a window has one. On macOS the application has it, so this sets that,
+# through crates winit already links, at its versions.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = { version = "0.2.2", features = ["NSGeometry", "NSRunLoop", "NSDate", "NSThread"] }
+objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSResponder", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphics", "NSColorSpace"] }
+
+# The example puts the program in the Dock, to look at the icon.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = { version = "0.2.2", features = ["NSRunningApplication"] }
