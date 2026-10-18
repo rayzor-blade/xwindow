@@ -215,6 +215,76 @@ fn run(dir: &Path, command: &mut Command) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+#[test]
+fn a_program_that_reads_nothing_loses_no_press_and_no_release() {
+    let wire = xwindow_bindgen::browser_wire().unwrap();
+    let dir = std::env::temp_dir().join(format!("xwindow-flood-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wire.rs"), &wire.rust).unwrap();
+    std::fs::write(dir.join(xwindow_backend::WIRE_MODULE), &wire.js).unwrap();
+    std::fs::write(
+        dir.join(xwindow_backend::AGENT_MODULE),
+        xwindow_backend::AGENT,
+    )
+    .unwrap();
+    // The program that decodes takes the file to read.
+    std::fs::write(
+        dir.join("main.rs"),
+        PROGRAM.replace(
+            "std::fs::read(\"memory.bin\")",
+            "std::fs::read(std::env::args().nth(2).unwrap())",
+        ),
+    )
+    .unwrap();
+    run(
+        &dir,
+        Command::new("rustc").args(["--edition", "2024", "-O", "main.rs", "-o", "program"]),
+    );
+    let setup = &HARNESS[..HARNESS.find("fire(\"pointermove\"").unwrap()];
+    // A ring of 8 KB, which the flood fills many times over.
+    let setup = setup.replace("1 << 16", "1 << 13");
+    let harness = format!(
+        "{setup}\n{}",
+        r#"
+const mouse = (extra) => ({ pointerId: 1, pointerType: "mouse", offsetY: 5, movementX: 0, movementY: 0, pressure: 0, ...extra });
+// The program reads nothing: moves, a press, moves, a release, wheel turns, and a redraw asked for.
+for (let i = 0; i < 1000; i++) fire("pointermove", mouse({ offsetX: i }));
+fire("pointerdown", mouse({ button: 0, offsetX: 1000, pressure: 0.5 }));
+for (let i = 0; i < 1000; i++) fire("pointermove", mouse({ offsetX: 1000 + i }));
+fire("pointerup", mouse({ button: 0, offsetX: 2000 }));
+for (let i = 0; i < 100; i++) fire("wheel", { deltaMode: 0, deltaX: 0, deltaY: 10, ctrlKey: false, preventDefault() {} });
+Atomics.store(words, 44 >> 2, 1);
+await new Promise((resolve) => setTimeout(resolve, 20));
+writeFileSync("full.bin", new Uint8Array(memory.buffer));
+// The program reads all of it, and the agent posts what it held at its next frame.
+Atomics.store(words, 28 >> 2, Atomics.load(words, 24 >> 2));
+await new Promise((resolve) => setTimeout(resolve, 20));
+writeFileSync("after.bin", new Uint8Array(memory.buffer));
+process.exit(0);
+"#
+    );
+    std::fs::write(dir.join("harness.mjs"), harness).unwrap();
+    run(&dir, Command::new("node").arg("harness.mjs"));
+    let full = run(&dir, Command::new(dir.join("program")).args(["decode", "full.bin"]));
+    let after = run(&dir, Command::new(dir.join("program")).args(["decode", "after.bin"]));
+    std::fs::remove_dir_all(&dir).ok();
+
+    let all: Vec<&str> = full.lines().chain(after.lines()).collect();
+    let at = |what: &str| all.iter().position(|l| l.starts_with(what));
+    let press = at("MouseInput device=1 on=true").expect("the press arrived");
+    let release = at("MouseInput device=1 on=false").expect("the release arrived");
+    assert!(press < release, "{all:#?}");
+    // Where the pointer was when it was pressed, and where it ended.
+    let moved = |line: &str| line.starts_with("CursorMoved");
+    let before = all[..press].iter().rev().find(|l| moved(l)).expect("a move before the press");
+    assert!(before.contains("x=1998 "), "{before}");
+    let last = all.iter().rev().find(|l| moved(l)).expect("a move at the end");
+    assert!(last.contains("x=3998 "), "{last}");
+    // Far fewer moves than were made, and a redraw.
+    assert!(all.iter().filter(|l| moved(l)).count() < 400, "{}", all.len());
+    assert!(all.iter().any(|l| *l == "RedrawRequested"), "{all:#?}");
+}
+
 const GAMEPAD_PROGRAM: &str = r#"
 #[allow(dead_code,non_camel_case_types,clippy::all)] mod wire {include!("wire.rs");}
 use wire::*;

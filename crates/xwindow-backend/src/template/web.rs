@@ -51,8 +51,9 @@ static BLOCK: Block = Block {
     redraw: AtomicI32::new(0),
 };
 
-/// Room in the queue for a burst of pointer events between two polls.
-const RING: usize = 1 << 16;
+/// Room in the queue for what the page posts while the program is busy: some thousands of events. The agent holds pointer
+/// positions and wheel sums, rather than lose a press or a release, once it is three quarters full.
+const RING: usize = 1 << 18;
 
 /// The screen, the one monitor a page has.
 const SCREEN: i32 = (Kind::Monitor as i32) << 26 | 1;

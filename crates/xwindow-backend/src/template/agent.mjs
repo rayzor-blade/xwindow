@@ -35,7 +35,67 @@ export function start({ memory, address, canvas }) {
     return;
   }
   const queue = new Queue(memory, address + QUEUE);
-  const post = (event) => post_XwEvent(queue, event);
+
+  // The ring the program reads its events from is finite, and a program busy in a long collection or a shader build reads none
+  // for a while. Events that only say where the pointer is, or add to how far a wheel or a pinch has gone, are held once the
+  // ring is three quarters full: the newest position, the sums of the rest. They go in when the program has read some. Any other
+  // event, a press, a key, a resize, the redraw, has the whole ring, and the held ones go in first, so none of those is lost
+  // and a press still lands where the pointer was.
+  const room = () => {
+    const w = new Int32Array(memory.buffer, address + QUEUE, 5);
+    const tail = Atomics.load(w, 0) >>> 0, head = Atomics.load(w, 1) >>> 0, capacity = Atomics.load(w, 3) >>> 0;
+    return { free: capacity - ((tail - head + capacity) % capacity) - 4, capacity };
+  };
+  const held = new Map();
+  // What an event is held under, or null for one that is never held.
+  const holdKey = (e) => {
+    switch (e.kind) {
+      case "cursor-moved": return `move ${e.device}`;
+      case "touch": return e.phase === PHASE.MOVED ? `touch ${e.device}` : null;
+      case "touchpad-pressure": return "pressure";
+      case "mouse-motion": return "motion";
+      case "mouse-wheel": return `wheel ${e.unit}`;
+      case "pinch-gesture": return e.phase === PHASE.ENDED ? null : "pinch";
+      default: return null;
+    }
+  };
+  const hold = (key, e) => {
+    const before = held.get(key);
+    if (before && (e.kind === "mouse-motion" || e.kind === "mouse-wheel")) {
+      e = { ...e, x: before.x + e.x, y: before.y + e.y };
+    } else if (before && e.kind === "pinch-gesture") {
+      e = { ...e, phase: before.phase, scale: before.scale + e.scale };
+    }
+    held.set(key, e);
+  };
+  // Posts what was held, oldest first, as far as the ring has room.
+  const release = () => {
+    for (const [key, e] of held) {
+      if (!post_XwEvent(queue, e)) return false;
+      held.delete(key);
+    }
+    return true;
+  };
+  let warned = 0;
+  const post = (event) => {
+    const key = holdKey(event);
+    if (key !== null) {
+      const { free, capacity } = room();
+      if (held.size > 0 || free < capacity / 4) {
+        hold(key, event);
+        if (free >= capacity / 4) release();
+        return true;
+      }
+    } else if (held.size > 0) {
+      release();
+    }
+    const posted = post_XwEvent(queue, event);
+    if (!posted && Date.now() - warned > 2000) {
+      warned = Date.now();
+      console.warn(`xwindow: the program is not reading its events, and ${event.kind} was lost`);
+    }
+    return posted;
+  };
   const ratio = () => globalThis.devicePixelRatio || 1;
   const at = (e) => [e.offsetX * ratio(), e.offsetY * ratio()];
   const modifiers = (e) =>
@@ -515,7 +575,9 @@ export function start({ memory, address, canvas }) {
   const frame = () => {
     sampleGamepads();
     const words = new Int32Array(memory.buffer, address + REDRAW, 1);
-    if (Atomics.exchange(words, 0, 0) !== 0) post({ kind: "redraw-requested" });
+    // Taken only once it is posted: one the ring had no room for is asked for again at the next frame.
+    if (Atomics.exchange(words, 0, 0) !== 0 && !post({ kind: "redraw-requested" })) Atomics.store(words, 0, 1);
+    if (held.size > 0 && room().free >= room().capacity / 4) release();
     requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
