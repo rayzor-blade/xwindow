@@ -126,6 +126,12 @@ harness. It must:
   `start({ memory, address, canvas })`; and
 - serve the page with the isolation headers `SharedArrayBuffer` needs.
 
+The program's request for the window's size, minimum and maximum becomes the
+canvas's CSS size, so a canvas the page does not size takes it. A page that lays
+the canvas out itself, as a full-window one, marks it `data-xwindow="fit"`: the
+agent then leaves its size to the page, and the window is whatever the page
+makes it, in physical pixels at the page's scale, followed as it changes.
+
 What the program asks of the window crosses the generated wire's mailbox.
 Some requests are the DOM's own operations, such as `Document.title` and
 `CSSStyleDeclaration.setProperty`; the rest are the agent's, declared in

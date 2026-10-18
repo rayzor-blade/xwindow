@@ -390,8 +390,11 @@ export function start({ memory, address, canvas }) {
   });
 
   // A command that sizes the canvas posts the size it lays out to, so the
-  // program has it once its commands have run, not a frame later.
+  // program has it once its commands have run, not a frame later. A canvas the
+  // page sizes, marked data-xwindow="fit", is the window's size whatever the
+  // program asks of it: the window is what the page lays out.
   const cssSize = (w, h, first, second) => {
+    if (canvas.dataset.xwindow === "fit") return;
     canvas.style[first] = w > 0 ? `${w}px` : "";
     canvas.style[second] = h > 0 ? `${h}px` : "";
     if (!canvas.hidden) measure();
