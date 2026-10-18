@@ -1,1 +1,1 @@
-{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":5,"timestamp":1792314613,"nonce":"TZWOvu7zlHgF8x0ms0ppuhzmX2U=","added":["debt","area:web"],"removed":null}]}
+{"author":{"id":"2f242a7e7f2592f8909954a77fabece74f6e8cc197182647ed3b15ea8e3878af"},"ops":[{"type":3,"timestamp":1792314613,"nonce":"ujIYF1ir0/BoJ0UVYDZW9upeaqo=","message":"Done in d9e82c12d0fbf14d8d033e04548c26e434edaa59. Not yet in hlwindow, which pins xwindow.","files":null}]}
