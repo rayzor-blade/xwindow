@@ -2426,7 +2426,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 [[package]]
 name = "x_idl"
 version = "0.1.0"
-source = "git+https://github.com/rayzor-blade/x-idl.git?rev=bf1ab2f262c00438f26e261a45822e3fbd6db76a#bf1ab2f262c00438f26e261a45822e3fbd6db76a"
+source = "git+https://github.com/rayzor-blade/x-idl.git?rev=753610fd220dcfb5cce358e9418eadc48cb4562d#753610fd220dcfb5cce358e9418eadc48cb4562d"
 dependencies = [
  "proc-macro2",
  "quote",
