@@ -71,6 +71,7 @@ class Element extends EventTarget {
     this.style = { setProperty(name, value) { this[name] = value; } };
     this.tabIndex = -1;
     this.hidden = true;
+    this.dataset = {};
   }
   // Laid out at its CSS size, or 320 by 200.
   getBoundingClientRect() {
