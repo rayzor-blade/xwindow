@@ -572,15 +572,15 @@ impl Loop {
                     return Event::RedrawRequested;
                 }
             }
+            // Another window needs dispatch before this one can block again.
+            if deadline.is_some() && pending(&self.app) {
+                return Event::None;
+            }
             if deadline.is_none() && EXTERNAL_PUMP.get() {
                 return Event::None;
             }
             // A redraw asked for wants the platform's next pass now.
-            let asked = self
-                .app
-                .windows
-                .get(handle)
-                .is_some_and(|open| open.redraw == Redraw::Asked);
+            let asked = self.app.windows.iter().any(|(_, open)| open.redraw == Redraw::Asked);
             if self.hosted() {
                 self.app.next_turn = match deadline {
                     _ if asked => ControlFlow::Poll,

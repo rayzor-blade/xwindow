@@ -152,6 +152,7 @@ impl Desktop {
             Self::external_wait,
         );
         self.check("application work wakes the event loop", Self::wake_work);
+        self.check("waiting yields to another window's events", Self::wait_other_window);
         self.check("windows report size, title and monitor", Self::describe);
         self.check("events go to the window they are for", Self::routed);
         self.check("Window.focus focuses the window", Self::backend_focus);
@@ -437,6 +438,29 @@ impl Desktop {
                 w.frame = Some(frame);
             }
         }
+        Ok(None)
+    }
+
+    fn wait_other_window(&mut self) -> Checked {
+        if self.external { return skip("external pumping dispatches all windows itself"); }
+        self.pump(QUIET);
+        let a = self.handle(A);
+        let b = self.handle(B);
+        unsafe { native::window_request_redraw(b) };
+        let started = Instant::now();
+        let event = unsafe { native::window_wait(a, 0.5) };
+        if started.elapsed() >= Duration::from_millis(350) {
+            return Err("waiting on A blocked dispatch of B's redraw".into());
+        }
+        self.wins[A].keep(event);
+        let mut redraw = false;
+        loop {
+            let event = unsafe { native::window_poll(b) };
+            if matches!(event, Event::None) { break; }
+            redraw |= matches!(event, Event::RedrawRequested);
+            self.wins[B].keep(event);
+        }
+        if !redraw { return Err("B's redraw was consumed by waiting on A".into()); }
         Ok(None)
     }
 
