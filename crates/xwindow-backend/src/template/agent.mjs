@@ -271,11 +271,15 @@ export function start({ memory, address, canvas }) {
       const bit = e.location === 1 ? side : side * 2;
       sides = pressed ? sides | bit : sides & ~bit;
     }
+    const printable = Array.from(e.key).length === 1;
+    const shortcut = (e.metaKey || e.ctrlKey) && !e.getModifierState?.("AltGraph");
     post({
       kind: "keyboard-input",
       on: pressed,
       code: e.code,
       key: e.key,
+      // Text ownership is captured before queued events cross a focus change.
+      text: pressed && !imeAllowed && !shortcut && printable ? e.key : "",
       location: e.location,
       repeat: e.repeat,
       synthetic: !e.isTrusted,
@@ -285,10 +289,11 @@ export function start({ memory, address, canvas }) {
       lastModifiers = (mods << 8) | sides;
       post({ kind: "modifiers-changed", modifiers: mods, sides });
     }
-    // Keys the program handles should not also scroll or navigate the page.
-    // While text input is allowed they keep their default action, which is
-    // how typed text reaches the input method.
-    if (!e.metaKey && !e.ctrlKey && !imeAllowed) e.preventDefault();
+    // Clipboard shortcuts need their DOM copy/cut events; paste is handled above.
+    // Only text entry and composition keep the input method's default action.
+    const clipboard = shortcut && !e.altKey && /^[cx]$/i.test(e.key);
+    const input = imeAllowed && (e.isComposing || !shortcut && (printable || e.key === "Dead" || e.key === "Process"));
+    if (pressed && !clipboard && !input) e.preventDefault();
   };
   const listenKeys = (target) => {
     target.addEventListener("keydown", key(true));

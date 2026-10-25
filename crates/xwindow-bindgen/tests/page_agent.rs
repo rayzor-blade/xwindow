@@ -386,3 +386,70 @@ writeFileSync("memory.bin",new Uint8Array(memory.buffer));console.log(JSON.strin
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn focused_application_shortcuts_cancel_browser_defaults_but_keep_text_and_clipboard() {
+    let wire = xwindow_bindgen::browser_wire().unwrap();
+    let dir = std::env::temp_dir().join(format!("xwindow-shortcuts-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wire.rs"), &wire.rust).unwrap();
+    std::fs::write(dir.join(xwindow_backend::WIRE_MODULE), &wire.js).unwrap();
+    std::fs::write(dir.join(xwindow_backend::AGENT_MODULE), xwindow_backend::AGENT).unwrap();
+    let program = PROGRAM.replace(
+        "if mode == \"encode\" {",
+        r#"if mode == "ime-on" || mode == "ime-off" {
+            let mut e = Encoder::new();
+            e.xw_agent_set_ime_allowed(Handle(5), &(mode == "ime-on"));
+            std::fs::write(format!("{mode}.bin"), &e.bytes).unwrap(); return;
+        }
+        if mode == "encode" {"#,
+    ).replace(
+        "// A pasted piece's base64, by its length.",
+        r#"("text", event.text.clone().filter(|_| event.kind == XwEventKind::KeyboardInput)),
+        // A pasted piece's base64, by its length."#,
+    );
+    std::fs::write(dir.join("main.rs"), program).unwrap();
+    run(&dir, Command::new("rustc").args(["--edition", "2024", "-O", "main.rs", "-o", "program"]));
+    for mode in ["ime-on", "ime-off"] { run(&dir, Command::new(dir.join("program")).arg(mode)); }
+    let setup = &HARNESS[..HARNESS.find("fire(\"pointermove\"").unwrap()];
+    let harness = format!("{setup}\n{}", r#"
+globalThis.DOMRect = class { constructor(x,y,width,height) { Object.assign(this,{x,y,width,height}); } };
+globalThis.EditContext = class extends EventTarget {
+  text=""; selectionStart=0; selectionEnd=0;
+  updateText() {this.text="";} updateSelection() {} updateControlBounds() {} updateSelectionBounds() {}
+};
+const batch = async file => {
+  const bytes=readFileSync(file); new Uint8Array(memory.buffer,1<<17,bytes.length).set(bytes); words.set([1<<17,bytes.length],2);
+  const serial=Atomics.add(words,0,1)+1; Atomics.notify(words,0);
+  while(Atomics.load(words,1)!==serial) await new Promise(r=>setTimeout(r,1));
+};
+const expect = (ok, name) => {if (!ok) throw new Error(name);};
+const press = (key, extras={}, target=canvas) => {
+  const event=Object.assign(new Event("keydown",{cancelable:true}),{key,code:key.length===1?"Key"+key.toUpperCase():key,location:0,repeat:false,...extras});
+  target.dispatchEvent(event); return event.defaultPrevented;
+};
+expect(press("a"),"plain key is owned by app before IME");
+await batch("ime-on.bin");
+for (const modifier of ["metaKey","ctrlKey"]) {
+  for (const key of ["p","s","r","w","f","a","z", "ArrowLeft"]) expect(press(key,{[modifier]:true}),modifier+key);
+  for (const key of ["c","x","v"]) expect(!press(key,{[modifier]:true}),"clipboard "+modifier+key);
+}
+for (const key of ["F5","F12","Tab","Enter","Backspace","Delete","ArrowDown","Escape"]) expect(press(key),key);
+expect(!press("b"),"IME printable default");
+expect(!press("Dead"),"dead key default");
+expect(!press("Process",{isComposing:true}),"composition default");
+expect(!press("@",{ctrlKey:true,altKey:true,getModifierState:key=>key==="AltGraph"}),"AltGraph text default");
+expect(!press("p",{ctrlKey:true},page),"unfocused browser shortcuts remain available");
+await batch("ime-off.bin");
+expect(press("c"),"key after IME is disabled");
+writeFileSync("memory.bin",new Uint8Array(memory.buffer));process.exit(0);
+"#);
+    std::fs::write(dir.join("harness.mjs"), harness).unwrap();
+    run(&dir, Command::new("node").arg("harness.mjs"));
+    let events = run(&dir, Command::new(dir.join("program")).arg("decode"));
+    assert!(events.contains("KeyboardInput on=true code=KeyA key=a text=a"), "{events}");
+    assert!(events.contains("KeyboardInput on=true code=KeyB key=b text=\n"), "{events}");
+    assert!(events.contains("KeyboardInput on=true code=KeyC key=c text=c"), "{events}");
+    assert!(!events.contains("text=b\n"), "{events}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

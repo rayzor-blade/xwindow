@@ -295,14 +295,18 @@ impl Page {
             K::KeyboardInput => {
                 let code = e.code.clone().unwrap_or_default();
                 let logical_key = logical_key(e.key.as_deref().unwrap_or(""), &code);
-                let text = match &logical_key {
-                    Key::Character { text } if on && !self.ime_allowed => OptionalText::Some { text: text.clone() },
-                    Key::Named {
-                        key: NamedKey::Space,
-                    } if on && !self.ime_allowed => OptionalText::Some {
-                        text: " ".to_owned(),
+                let text = match &e.text {
+                    Some(text) if on && !text.is_empty() => OptionalText::Some { text: text.clone() },
+                    Some(_) => OptionalText::None,
+                    None => match &logical_key {
+                        Key::Character { text } if on && !self.ime_allowed => OptionalText::Some { text: text.clone() },
+                        Key::Named {
+                            key: NamedKey::Space,
+                        } if on && !self.ime_allowed => OptionalText::Some {
+                            text: " ".to_owned(),
+                        },
+                        _ => OptionalText::None,
                     },
-                    _ => OptionalText::None,
                 };
                 Event::KeyboardInput {
                     device_id,
