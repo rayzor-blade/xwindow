@@ -3,7 +3,7 @@
 // thread, where the canvas's events fire, and calls
 // `start({ memory, address, canvas })` with the program's shared memory and
 // the address of its block: a mailbox, then 24 bytes on a queue, then 44
-// bytes on a redraw word.
+// bytes on a redraw word, then the runtime's completion-word address at 48.
 //
 // The agent serves the mailbox, whose commands the generated wire
 // (xwindow_wire.mjs) runs against the page's objects. It posts each event it
@@ -14,6 +14,8 @@ import { Wire, Queue, serve, post_XwEvent } from "./xwindow_wire.mjs";
 
 const QUEUE = 24;
 const REDRAW = 44;
+const RUNTIME_WAKE = 48;
+const APPLICATION_WAKE = 52;
 
 // The page's objects, under the handles the program names them by.
 const WINDOW = 1;
@@ -572,8 +574,17 @@ export function start({ memory, address, canvas }) {
 
   // A redraw the program asked for since the last frame is answered in this
   // one.
+  let wakeSeen = 0;
   const frame = () => {
     sampleGamepads();
+    const wakeAt = Atomics.load(new Int32Array(memory.buffer, address + RUNTIME_WAKE, 1), 0) >>> 0;
+    const now = wakeAt ? Atomics.load(new Int32Array(memory.buffer, wakeAt, 1), 0) : wakeSeen;
+    const application = new Int32Array(memory.buffer, address + APPLICATION_WAKE, 1);
+    const requested = Atomics.exchange(application, 0, 0) !== 0;
+    if (requested || now !== wakeSeen) {
+      if (post({ kind: "wake" })) wakeSeen = now;
+      else if (requested) Atomics.store(application, 0, 1);
+    }
     const words = new Int32Array(memory.buffer, address + REDRAW, 1);
     // Taken only once it is posted: one the ring had no room for is asked for again at the next frame.
     if (Atomics.exchange(words, 0, 0) !== 0 && !post({ kind: "redraw-requested" })) Atomics.store(words, 0, 1);

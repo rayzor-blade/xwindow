@@ -11,7 +11,7 @@
 //! it, does nothing; what it has no answer for reads as the default.
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicI32, Ordering::SeqCst};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering::SeqCst};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 use xwindow_core::{CursorMoves, Kind, Slab};
@@ -43,12 +43,17 @@ struct Block {
     queue: Queue,
     /// Set by the program, cleared by the agent when it posts the redraw.
     redraw: AtomicI32,
+    /// Address of the runtime's completion word, or zero.
+    runtime_wake: AtomicU32,
+    application_wake: AtomicI32,
 }
 
 static BLOCK: Block = Block {
     mailbox: Mailbox::new(),
     queue: Queue::new(),
     redraw: AtomicI32::new(0),
+    runtime_wake: AtomicU32::new(0),
+    application_wake: AtomicI32::new(0),
 };
 
 /// Room in the queue for what the page posts while the program is busy: some thousands of events. The agent holds pointer
@@ -80,6 +85,7 @@ struct Page {
     /// The cursor's CSS, and whether it shows.
     cursor: String,
     cursor_visible: bool,
+    ime_allowed: bool,
     screen: (i32, i32, String),
     /// The program asked for no device events.
     no_devices: bool,
@@ -117,6 +123,7 @@ static PAGE: LazyLock<Mutex<Page>> = LazyLock::new(|| {
         sizing: ScaleSizing::Logical,
         cursor: "default".to_owned(),
         cursor_visible: true,
+        ime_allowed: false,
         screen: (0, 0, String::new()),
         no_devices: false,
         clipboard_items: Slab::new(Kind::ClipboardItems),
@@ -193,6 +200,7 @@ impl Page {
         let on = e.on.unwrap_or(false);
         let text = e.text.clone().unwrap_or_default();
         Some(match e.kind {
+            K::Wake => return None,
             K::GamepadStatus => { self.gamepads_available=on; self.gamepads_error=text; return None; },
             K::GamepadRumble => { self.gamepad_rumble_accepted=on; return None; },
             K::GamepadDisconnected => {
@@ -288,10 +296,10 @@ impl Page {
                 let code = e.code.clone().unwrap_or_default();
                 let logical_key = logical_key(e.key.as_deref().unwrap_or(""), &code);
                 let text = match &logical_key {
-                    Key::Character { text } if on => OptionalText::Some { text: text.clone() },
+                    Key::Character { text } if on && !self.ime_allowed => OptionalText::Some { text: text.clone() },
                     Key::Named {
                         key: NamedKey::Space,
-                    } if on => OptionalText::Some {
+                    } if on && !self.ime_allowed => OptionalText::Some {
                         text: " ".to_owned(),
                     },
                     _ => OptionalText::None,
@@ -746,9 +754,15 @@ pub unsafe fn window_take_cursor_move(handle: i32) -> Event {
     }))
 }
 
-/// The web host owns its event queue and has no native loop to wake.
+/// The adapter may supply its runtime's completion word for the page to observe.
+pub fn set_runtime_wake(word: u32) {
+    BLOCK.runtime_wake.store(word, SeqCst);
+}
+
+/// Wake application work without drawing or taking the page lock held by a waiting thread.
 pub unsafe fn window_wake() -> bool {
-    false
+    BLOCK.application_wake.store(1, SeqCst);
+    true
 }
 
 /// A page's canvas cannot close: it is hidden, and polls nothing more.
@@ -1038,6 +1052,7 @@ pub unsafe fn window_set_cursor_position(_: i32, _: f64, _: f64) -> bool {
 
 pub unsafe fn window_set_ime_allowed(handle: i32, yes: bool) {
     with(handle, (), |p| {
+        p.ime_allowed = yes;
         p.commands.xw_agent_set_ime_allowed(AGENT, &yes)
     });
 }

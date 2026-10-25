@@ -16,7 +16,7 @@ enum XwEventKind {
   "ime-disabled", "hovered-file", "dropped-file", "hovered-file-cancelled",
   "touch", "pinch-gesture", "touchpad-pressure", "mouse-motion", "suspended",
   "resumed", "fullscreen-changed", "screen", "paste-data", "paste",
-  "gamepad-status", "gamepad-snapshot", "gamepad-disconnected", "gamepad-rumble"
+  "gamepad-status", "gamepad-snapshot", "gamepad-disconnected", "gamepad-rumble", "wake"
 };
 
 // One event; which members it has depends on its kind. Positions and sizes

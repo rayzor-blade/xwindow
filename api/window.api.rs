@@ -404,7 +404,7 @@ trait Window {
     fn wait(this: &Window, timeout: f64) -> Event;
     /// Wake the current or next wait for application work, from any thread.
     /// Several calls coalesce; no synthetic window event is produced.
-    /// False when no native event loop is available (including web hosts).
+    /// False if no event loop is available.
     #[native(window_wake)]
     fn wake() -> bool;
     /// Coalesce cursor moves inside a caller-guaranteed quiet rectangle in
