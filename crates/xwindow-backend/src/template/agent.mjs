@@ -261,6 +261,7 @@ export function start({ memory, address, canvas }) {
   const cancelPointer = (e) => {
     const buttons = heldButtons.get(e.pointerId);
     heldButtons.delete(e.pointerId);
+    if (buttons) post({ kind: "cursor-left", device: e.pointerId });
     if (buttons) for (const button of buttons) {
       post({ kind: "mouse-input", device: e.pointerId, button, on: false });
     }

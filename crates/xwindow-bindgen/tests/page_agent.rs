@@ -513,9 +513,11 @@ process.exit(0);
         "MouseInput device=1 on=false button=0",
         "CursorMoved device=1 x=60 y=80",
         "MouseInput device=1 on=true button=0",
+        "CursorLeft device=1",
         "MouseInput device=1 on=false button=0",
         "CursorMoved device=1 x=120 y=140",
         "MouseInput device=1 on=true button=0",
+        "CursorLeft device=1",
         "MouseInput device=1 on=false button=0",
     ]);
 }
