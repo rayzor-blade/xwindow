@@ -79,6 +79,10 @@ class Element extends EventTarget {
   }
   focus() { document.activeElement = this; }
   contains(other) { return other === this; }
+  captures = new Set();
+  setPointerCapture(id) { this.captures.add(id); }
+  hasPointerCapture(id) { return this.captures.has(id); }
+  releasePointerCapture(id) { this.captures.delete(id); }
 }
 const page = new EventTarget();
 for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
@@ -186,10 +190,11 @@ fn commands_reach_the_page_and_its_events_come_back() {
             "Focused on=false",
             "ThemeChanged on=false",
             "CursorMoved device=1 x=20 y=40",
+            "CursorMoved device=1 x=20 y=40",
             "MouseInput device=1 on=true button=2",
             "KeyboardInput on=true code=KeyB key=b",
-            "KeyboardInput on=true code=KeyA key=a",
             "ModifiersChanged modifiers=1",
+            "KeyboardInput on=true code=KeyA key=a",
             "PasteData on=true key=text/plain base64=4",
             "PasteData on=true key=text/html base64=12",
             "PasteData on=true key=image/png base64=16384",
@@ -277,9 +282,9 @@ process.exit(0);
     // Where the pointer was when it was pressed, and where it ended.
     let moved = |line: &str| line.starts_with("CursorMoved");
     let before = all[..press].iter().rev().find(|l| moved(l)).expect("a move before the press");
-    assert!(before.contains("x=1998 "), "{before}");
+    assert!(before.contains("x=2000 "), "{before}");
     let last = all.iter().rev().find(|l| moved(l)).expect("a move at the end");
-    assert!(last.contains("x=3998 "), "{last}");
+    assert!(last.contains("x=4000 "), "{last}");
     // Far fewer moves than were made, and a redraw.
     assert!(all.iter().filter(|l| moved(l)).count() < 400, "{}", all.len());
     assert!(all.iter().any(|l| *l == "RedrawRequested"), "{all:#?}");
@@ -452,4 +457,65 @@ writeFileSync("memory.bin",new Uint8Array(memory.buffer));process.exit(0);
     assert!(events.contains("KeyboardInput on=true code=KeyC key=c text=c"), "{events}");
     assert!(!events.contains("text=b\n"), "{events}");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pointer_boundaries_keep_positions_modifiers_and_capture() {
+    let wire = xwindow_bindgen::browser_wire().unwrap();
+    let dir = std::env::temp_dir().join(format!("xwindow-selection-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("wire.rs"), &wire.rust).unwrap();
+    std::fs::write(dir.join(xwindow_backend::WIRE_MODULE), &wire.js).unwrap();
+    std::fs::write(dir.join(xwindow_backend::AGENT_MODULE), xwindow_backend::AGENT).unwrap();
+    std::fs::write(dir.join("main.rs"), PROGRAM).unwrap();
+    run(&dir, Command::new("rustc").args(["--edition", "2024", "-O", "main.rs", "-o", "program"]));
+    let setup = &HARNESS[..HARNESS.find("fire(\"pointermove\"").unwrap()];
+    let harness = format!("{setup}\n{}", r#"
+const mouse = (extra) => ({pointerId:1,pointerType:"mouse",button:0,offsetX:10,offsetY:20,pressure:0,...extra});
+// First input is a press; neither boundary requires an earlier movement event.
+fire("pointerdown",mouse({shiftKey:true}));
+if (!canvas.hasPointerCapture(1)) throw Error("press did not capture the pointer");
+fire("pointerup",mouse({offsetX:50,offsetY:80,shiftKey:true}));
+if (canvas.hasPointerCapture(1)) throw Error("release retained pointer capture");
+// A missed Meta release must not turn the next drag into navigation.
+fire("keydown",{code:"MetaLeft",key:"Meta",location:1,metaKey:true,preventDefault(){}});
+fire("pointerdown",mouse({offsetX:50,offsetY:80}));
+fire("pointermove",mouse({getCoalescedEvents:()=>[mouse({offsetX:10,offsetY:20})]}));
+fire("pointerup",mouse({offsetX:10,offsetY:20}));
+fire("pointerdown",mouse({offsetX:30,offsetY:40}));
+fire("pointercancel",mouse({}));
+canvas.releasePointerCapture(1);
+fire("lostpointercapture",mouse({}));
+fire("pointerdown",mouse({offsetX:60,offsetY:70}));
+canvas.releasePointerCapture(1);
+fire("lostpointercapture",mouse({}));
+writeFileSync("memory.bin",new Uint8Array(memory.buffer));
+process.exit(0);
+"#);
+    std::fs::write(dir.join("harness.mjs"), harness).unwrap();
+    run(&dir, Command::new("node").arg("harness.mjs"));
+    let events = run(&dir, Command::new(dir.join("program")).arg("decode"));
+    std::fs::remove_dir_all(&dir).ok();
+    let lines: Vec<_> = events.lines().skip(4).collect();
+    assert_eq!(lines, [
+        "ModifiersChanged modifiers=1",
+        "CursorMoved device=1 x=20 y=40",
+        "MouseInput device=1 on=true button=0",
+        "CursorMoved device=1 x=100 y=160",
+        "MouseInput device=1 on=false button=0",
+        "ModifiersChanged modifiers=8",
+        "KeyboardInput on=true code=MetaLeft key=Meta",
+        "ModifiersChanged modifiers=0",
+        "CursorMoved device=1 x=100 y=160",
+        "MouseInput device=1 on=true button=0",
+        "CursorMoved device=1 x=20 y=40",
+        "CursorMoved device=1 x=20 y=40",
+        "MouseInput device=1 on=false button=0",
+        "CursorMoved device=1 x=60 y=80",
+        "MouseInput device=1 on=true button=0",
+        "MouseInput device=1 on=false button=0",
+        "CursorMoved device=1 x=120 y=140",
+        "MouseInput device=1 on=true button=0",
+        "MouseInput device=1 on=false button=0",
+    ]);
 }
