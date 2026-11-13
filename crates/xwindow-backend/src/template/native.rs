@@ -125,6 +125,12 @@ thread_local! {
     /// When device events should come, until the loop next runs and takes it.
     static LISTEN: Cell<Option<Listen>> = const { Cell::new(None) };
     static EXTERNAL_PUMP: Cell<bool> = const { Cell::new(false) };
+    /// How a host that runs the program as a fiber suspends it until its next
+    /// turn; see `xwindow_set_turn_yield`.
+    static TURN_YIELD: Cell<Option<extern "C" fn()>> = const { Cell::new(None) };
+    /// A wait or poll found nothing and asked for the next turn. The call
+    /// suspends once it has released the loop.
+    static YIELD_ASKED: Cell<bool> = const { Cell::new(false) };
 }
 
 impl App {
@@ -360,6 +366,18 @@ pub extern "C" fn xwindow_attach_pump() -> i32 {
     c_status(result)
 }
 
+/// Registers the function a host uses to suspend the program, which it runs
+/// as a fiber, until its next turn. Under `xwindow_run_turns`, `wait` and
+/// `poll` call it when there is nothing to return, and it returns when the
+/// next turn begins; the program then finds what that turn brought. A wait
+/// whose timeout has passed returns without calling it. Without one, `wait`
+/// and `poll` return at once and the turn function is the program's loop.
+/// Null removes it. Call it on the loop's thread, before `xwindow_run_turns`.
+#[unsafe(no_mangle)]
+pub extern "C" fn xwindow_set_turn_yield(suspend: Option<extern "C" fn()>) {
+    TURN_YIELD.set(suspend);
+}
+
 /// `attach` with `Drive::Turns`: runs the loop, calling `turn(data)` for each
 /// of the program's turns until it returns 0. Returns 0 when the loop ends,
 /// which on iOS it never does, and -1 when it could not run.
@@ -588,6 +606,11 @@ impl Loop {
                     Some(None) => ControlFlow::Wait,
                     Some(Some(deadline)) => ControlFlow::WaitUntil(deadline),
                 };
+                // A wait whose time is up has nothing left to suspend for.
+                let timed_out = matches!(deadline, Some(Some(d)) if Instant::now() >= d);
+                if !timed_out && TURN_YIELD.get().is_some() {
+                    YIELD_ASKED.set(true);
+                }
                 return Event::None;
             }
             let timeout = match deadline {
@@ -1611,14 +1634,54 @@ pub unsafe fn window_valid(handle: i32) -> bool {
 }
 
 pub unsafe fn window_poll(handle: i32) -> Event {
-    with(Event::None, |l| l.next(handle, None))
+    next_or_suspend(handle, None)
 }
 
 pub unsafe fn window_wait(handle: i32, timeout: f64) -> Event {
     let deadline = (timeout >= 0.0).then(|| {
         Instant::now() + Duration::try_from_secs_f64(timeout).unwrap_or(Duration::MAX / 2)
     });
-    with(Event::None, |l| l.next(handle, Some(deadline)))
+    next_or_suspend(handle, Some(deadline))
+}
+
+/// `next`, for a host that runs the program as a fiber. When the loop has
+/// nothing to return it has asked for its next turn, and the program is
+/// suspended until that turn begins, which happens here and not inside `next`:
+/// the host's handler borrows the loop to deliver events, so the suspended
+/// program must not hold it. Without a host function it is `next`.
+fn next_or_suspend(handle: i32, deadline: Option<Option<Instant>>) -> Event {
+    suspend_until_event(
+        || with(Event::None, |l| l.next(handle, deadline)),
+        |event| matches!(event, Event::None),
+        || YIELD_ASKED.take(),
+        || {
+            if let Some(suspend) = TURN_YIELD.get() {
+                suspend();
+            }
+        },
+        deadline.is_none(),
+    )
+}
+
+/// Calls `next` until it returns an event, suspending between calls while it
+/// asked for a turn. A poll suspends once, so it returns what that turn
+/// brought, or nothing.
+fn suspend_until_event<E>(
+    mut next: impl FnMut() -> E,
+    is_none: impl Fn(&E) -> bool,
+    mut asked: impl FnMut() -> bool,
+    mut suspend: impl FnMut(),
+    poll: bool,
+) -> E {
+    let mut suspended = false;
+    loop {
+        let event = next();
+        if !is_none(&event) || !asked() || (poll && suspended) {
+            return event;
+        }
+        suspended = true;
+        suspend();
+    }
 }
 
 pub unsafe fn window_coalesce_cursor_moves(handle: i32, left: f64, top: f64, right: f64, bottom: f64) {
@@ -2797,3 +2860,60 @@ pub unsafe fn gamepad_poll() -> crate::GamepadEvent {
         },
     }
 }
+
+#[cfg(test)]
+mod suspend_tests {
+    use super::suspend_until_event;
+    use std::cell::Cell;
+
+    /// A wait that finds nothing suspends until a turn brings an event.
+    #[test]
+    fn a_wait_suspends_until_an_event_comes() {
+        let calls = Cell::new(0);
+        let suspended = Cell::new(0);
+        let got = suspend_until_event(
+            || {
+                calls.set(calls.get() + 1);
+                (calls.get() == 3).then_some(7)
+            },
+            |e: &Option<i32>| e.is_none(),
+            || true,
+            || suspended.set(suspended.get() + 1),
+            false,
+        );
+        assert_eq!(got, Some(7));
+        assert_eq!(suspended.get(), 2);
+    }
+
+    /// A poll suspends once and returns what the turn brought, even nothing.
+    #[test]
+    fn a_poll_suspends_once() {
+        let suspended = Cell::new(0);
+        let got = suspend_until_event(
+            || None::<i32>,
+            |e| e.is_none(),
+            || true,
+            || suspended.set(suspended.get() + 1),
+            true,
+        );
+        assert_eq!(got, None);
+        assert_eq!(suspended.get(), 1);
+    }
+
+    /// Nothing asked for a turn, as when a wait timed out or no host function
+    /// is registered, so nothing suspends.
+    #[test]
+    fn no_request_means_no_suspension() {
+        let suspended = Cell::new(0);
+        let got = suspend_until_event(
+            || None::<i32>,
+            |e| e.is_none(),
+            || false,
+            || suspended.set(suspended.get() + 1),
+            false,
+        );
+        assert_eq!(got, None);
+        assert_eq!(suspended.get(), 0);
+    }
+}
+

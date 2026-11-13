@@ -172,6 +172,15 @@ time events have come, until it returns false. In a turn:
   after `poll`, within the timeout after `wait`, and when events come after
   a negative `wait`.
 
+A host that runs the program as a fiber, so that a program written as a loop
+(`while (...) { window.wait(t) ... }`) can run under turns, registers a
+suspend function before it runs the loop. Under `Drive::Turns`, `wait` and
+`poll` call it when they have nothing to return, and it returns when the next
+turn begins, so the program finds what that turn brought. The turn is still
+scheduled as above. A `wait` whose timeout has passed returns without calling
+it, and a `poll` calls it once. Without one, `wait` and `poll` return at once
+and the program is its `turn`.
+
 An adapter that runs natively must:
 
 - re-export `backend::{attach, Drive}`, and `winit` so a host builds the
@@ -185,7 +194,7 @@ An adapter that runs natively must:
 both ways on a desktop and checks what it saw.
 
 A host in C, such as an app that links HashLink statically on a phone,
-reaches the hook through two symbols every native adapter exports:
+reaches the hook through three symbols every native adapter exports:
 
 ```c
 /* Drive::Pump; 0 when attached, -1 when not (always on iOS). */
@@ -193,6 +202,10 @@ int xwindow_attach_pump(void);
 /* Drive::Turns: calls turn(data) each turn until it returns 0. Returns 0
    when the loop ends, which on iOS it never does, and -1 when it cannot run. */
 int xwindow_run_turns(int (*turn)(void *data), void *data);
+/* Registers the function that suspends a program run as a fiber until the
+   next turn; NULL removes it. Call it on the loop's thread before
+   xwindow_run_turns. */
+void xwindow_set_turn_yield(void (*suspend)(void));
 ```
 
 On Android the `AndroidApp` comes from `android_main`, which only Rust
