@@ -38,6 +38,8 @@ x-idl reads Rust-shaped declarations:
     variants, which nest.
   - Its first variant, with its fields at their defaults, is what a failed
     call returns.
+- `#[blocking]` marks a method that waits, as `Window.wait` does, for a
+  runtime that is told so before the call, as hxn's are.
 
 How each runtime takes variants:
 

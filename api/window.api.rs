@@ -400,6 +400,7 @@ trait Window {
     fn poll(this: &Window) -> Event;
     /// The next event, waiting up to `timeout` seconds for one; a negative
     /// timeout waits as long as it takes.
+    #[blocking]
     #[native(window_wait)]
     fn wait(this: &Window, timeout: f64) -> Event;
     /// Wake the current or next wait for application work, from any thread.
