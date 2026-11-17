@@ -235,6 +235,13 @@ bytes on, and a redraw word 44 bytes on, which the agent reads every frame.
 
 The agent posts `XwEvent`s through the generated `post_XwEvent`.
 
+For a program running on the page thread, the adapter can install a synchronous
+command transport with `web::set_dispatch`. It must execute all commands before
+returning. Pass `serveMailbox` to the page agent to install that transport
+instead of its shared-memory mailbox service; `start` returns the wire it creates.
+Window waits cannot block the page thread: poll events on animation frames or
+an event-loop timer.
+
 Keep runtime-specific wasm loading, side-module discovery, COOP/COEP serving
 and canvas transfer out of xwindow.
 

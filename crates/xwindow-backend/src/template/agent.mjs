@@ -31,7 +31,7 @@ const encoder = new TextEncoder();
 // A UTF-16 index in `text` as a UTF-8 byte offset, for an IME's cursor.
 const utf8Offset = (text, index) => (index < 0 ? -1 : encoder.encode(text.slice(0, index)).length);
 
-export function start({ memory, address, canvas }) {
+export function start({ memory, address, canvas, serveMailbox = serve }) {
   if (!canvas) {
     console.error("xwindow: the host gave the agent no canvas");
     return;
@@ -647,5 +647,6 @@ export function start({ memory, address, canvas }) {
     [STYLE, canvas.style],
     [AGENT, agent],
   ]));
-  serve(wire, address);
+  serveMailbox(wire, address);
+  return wire;
 }

@@ -13,6 +13,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering::SeqCst};
 use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::OnceLock;
 
 use xwindow_core::{CursorMoves, Kind, Slab};
 
@@ -55,6 +56,15 @@ static BLOCK: Block = Block {
     runtime_wake: AtomicU32::new(0),
     application_wake: AtomicI32::new(0),
 };
+
+type Dispatch = fn(&Mailbox, &[u8]);
+static DISPATCH: OnceLock<Dispatch> = OnceLock::new();
+
+/// Use a synchronous transport on a page that also runs the program.
+/// A transport must consume every command before returning.
+pub fn set_dispatch(dispatch: Dispatch) {
+    DISPATCH.get_or_init(|| dispatch);
+}
 
 /// Room in the queue for what the page posts while the program is busy: some thousands of events. The agent holds pointer
 /// positions and wheel sums, rather than lose a press or a release, once it is three quarters full.
@@ -146,7 +156,10 @@ impl Page {
     /// Hand the commands to the agent and wait until it has run them.
     fn flush(&mut self) {
         if !self.commands.bytes.is_empty() {
-            BLOCK.mailbox.send(&self.commands.bytes);
+            match DISPATCH.get() {
+                Some(dispatch) => dispatch(&BLOCK.mailbox, &self.commands.bytes),
+                None => BLOCK.mailbox.send(&self.commands.bytes),
+            }
             self.commands.bytes.clear();
             self.staged.clear();
         }

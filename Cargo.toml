@@ -10,4 +10,4 @@ license = "MIT"
 
 [workspace.dependencies]
 xwindow-core = { path = "crates/xwindow-core" }
-x_idl = { git = "https://github.com/rayzor-blade/x-idl.git", rev = "753610fd220dcfb5cce358e9418eadc48cb4562d" }
+x_idl = { git = "https://github.com/rayzor-blade/x-idl.git", rev = "1055cfd7e4925ebc7028175051dafb67d0b9dbe1" }
