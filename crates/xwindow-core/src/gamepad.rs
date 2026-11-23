@@ -29,6 +29,9 @@ pub enum Event {
 pub struct Device {
     pub source: usize,
     pub name: String,
+    /// The USB vendor and product ids, or -1 where the platform does not say.
+    pub vendor: i32,
+    pub product: i32,
     pub buttons: u32,
     pub axes: u8,
     pub rumble: bool,
@@ -93,6 +96,8 @@ impl State {
         let id = self.devices.put(Device {
             source,
             name,
+            vendor: -1,
+            product: -1,
             buttons: buttons & ((1 << BUTTONS) - 1),
             axes: axes & 15,
             rumble,
@@ -106,6 +111,14 @@ impl State {
             self.push(Event::Connected(id));
         }
         id
+    }
+    /// Records the USB vendor and product ids of the device `id`, -1 for one
+    /// the platform does not say.
+    pub fn identify(&mut self, id: i32, vendor: i32, product: i32) {
+        if let Some(device) = self.devices.get_mut(id) {
+            device.vendor = vendor;
+            device.product = product;
+        }
     }
     pub fn handle(&self, source: usize) -> i32 {
         self.sources.get(&source).copied().unwrap_or(0)
@@ -209,6 +222,34 @@ pub fn rumble_valid(strong: f64, weak: f64, seconds: f64) -> bool {
         && (0.0..=1.0).contains(&strong)
         && (0.0..=1.0).contains(&weak)
         && (0.0..=5.0).contains(&seconds)
+}
+
+/// The USB vendor and product ids in a browser's `Gamepad.id`, -1 each where
+/// it has none. Chromium writes them as `Vendor: 054c Product: 0ce6` in its
+/// parentheses, and Firefox as a `054c-0ce6-` prefix.
+pub fn browser_ids(id: &str) -> (i32, i32) {
+    fn hex(text: &str) -> Option<i32> {
+        let digits = text.get(..4)?;
+        if digits.chars().all(|c| c.is_ascii_hexdigit()) {
+            i32::from_str_radix(digits, 16).ok()
+        } else {
+            None
+        }
+    }
+    if let (Some(v), Some(p)) = (id.find("Vendor: "), id.find("Product: "))
+        && let (Some(vendor), Some(product)) = (hex(&id[v + 8..]), hex(&id[p + 9..]))
+    {
+        return (vendor, product);
+    }
+    let bytes = id.as_bytes();
+    if bytes.len() > 10
+        && bytes[4] == b'-'
+        && bytes[9] == b'-'
+        && let (Some(vendor), Some(product)) = (hex(id), hex(&id[5..]))
+    {
+        return (vendor, product);
+    }
+    (-1, -1)
 }
 
 #[cfg(test)]
@@ -318,5 +359,36 @@ mod tests {
             assert!(!rumble_valid(a, b, t));
         }
         assert!(rumble_valid(1.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn browser_ids_come_from_either_format() {
+        assert_eq!(
+            browser_ids(
+                "DualSense Wireless Controller (STANDARD GAMEPAD Vendor: 054c Product: 0ce6)"
+            ),
+            (0x054c, 0x0ce6)
+        );
+        assert_eq!(
+            browser_ids("045e-028e-Microsoft X-Box 360 pad"),
+            (0x045e, 0x028e)
+        );
+        assert_eq!(browser_ids("Generic USB Joystick"), (-1, -1));
+        assert_eq!(browser_ids("xyz1-0ce6-Pad"), (-1, -1));
+    }
+
+    #[test]
+    fn identify_records_the_ids() {
+        let mut s = State::new();
+        let id = s.connect(3, "pad".into(), 1, 1, false);
+        assert_eq!(
+            s.devices.get(id).map(|d| (d.vendor, d.product)),
+            Some((-1, -1))
+        );
+        s.identify(id, 0x057e, 0x2009);
+        assert_eq!(
+            s.devices.get(id).map(|d| (d.vendor, d.product)),
+            Some((0x057e, 0x2009))
+        );
     }
 }

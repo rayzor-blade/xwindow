@@ -68,8 +68,13 @@ It also honors `SDL_GAMECONTROLLERCONFIG` for native mapping overrides.
 Browsers provide their own
 [standard mapping](https://www.w3.org/TR/gamepad/#remapping).
 
-The current API exposes the device name and control capabilities. It does
-not yet expose controller-family metadata or a button-glyph library. Player
+The current API exposes the device name, control capabilities, and the
+USB ids: `vendorId()` and `productId()`. Natively they are the ids gilrs
+reports. In a browser they come from `Gamepad.id`, where Chromium writes
+`Vendor: 054c Product: 0ce6` and Firefox a `054c-0ce6-` prefix. Each is -1
+where the platform does not report it. The vendor id tells the controller
+family: 0x045e Microsoft, 0x054c Sony, 0x057e Nintendo, 0x28de Valve.
+xwindow has no button-glyph library. Player
 rebinding belongs in the application's action layer. Touchpad coordinates,
 gyro data and adaptive-trigger effects require additional device capabilities
 beyond this standard control API.

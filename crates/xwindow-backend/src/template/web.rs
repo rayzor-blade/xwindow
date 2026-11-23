@@ -224,7 +224,10 @@ impl Page {
                 let source=device_id as usize;
                 let buttons=e.gamepad_buttons.unwrap_or_default(); let axes=e.gamepad_axes.unwrap_or_default();
                 let count=buttons.len().min(17); let axis_count=axes.len().min(4);
-                self.gamepads.connect(source,text,(1<<count)-1,(1<<axis_count)-1,e.gamepad_rumble.unwrap_or(false));
+                let new_pad=self.gamepads.handle(source)==0;
+                let (vendor,product)=if new_pad { xwindow_core::gamepad::browser_ids(&text) } else { (-1,-1) };
+                let id=self.gamepads.connect(source,text,(1<<count)-1,(1<<axis_count)-1,e.gamepad_rumble.unwrap_or(false));
+                if new_pad { self.gamepads.identify(id,vendor,product); }
                 self.gamepad_indices.insert(source,e.gamepad_index.unwrap_or(0));
                 for (i,value) in buttons.iter().take(17).enumerate() { self.gamepads.button(source,i,*value,e.gamepad_pressed.unwrap_or(0)&(1<<i)!=0); }
                 for (i,value) in axes.iter().take(4).enumerate() { self.gamepads.axis(source,i,*value); }
@@ -1231,6 +1234,12 @@ pub unsafe fn gamepad_valid(id: i32) -> bool {
 }
 pub unsafe fn gamepad_device_id(id: i32) -> i32 {
     unsafe { gamepad_from_id(id) }
+}
+pub unsafe fn gamepad_vendor_id(id: i32) -> i32 {
+    gamepads().gamepads.devices.get(id).map_or(-1, |d| d.vendor)
+}
+pub unsafe fn gamepad_product_id(id: i32) -> i32 {
+    gamepads().gamepads.devices.get(id).map_or(-1, |d| d.product)
 }
 pub unsafe fn gamepad_name(id: i32) -> Text {
     Text::new(

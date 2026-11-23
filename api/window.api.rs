@@ -741,6 +741,13 @@ trait Gamepad {
     fn deviceId(this: &Gamepad) -> i32;
     #[native(gamepad_name)]
     fn name(this: &Gamepad) -> Text;
+    /// The USB vendor id, such as 0x054c for Sony, or -1 where the platform
+    /// does not report it.
+    #[native(gamepad_vendor_id)]
+    fn vendorId(this: &Gamepad) -> i32;
+    /// The USB product id, or -1 where the platform does not report it.
+    #[native(gamepad_product_id)]
+    fn productId(this: &Gamepad) -> i32;
     #[native(gamepad_has_button)]
     fn hasButton(this: &Gamepad, button: Enum<GamepadButton>) -> bool;
     #[native(gamepad_has_axis)]

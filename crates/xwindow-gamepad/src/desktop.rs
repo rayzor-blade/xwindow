@@ -218,12 +218,17 @@ fn connect(s: &mut State, pad: gilrs::Gamepad<'_>) {
         }
     });
     let source = usize::from(pad.id());
-    s.connect(
+    let id = s.connect(
         source,
         pad.name().to_owned(),
         buttons,
         axes,
         pad.is_ff_supported(),
+    );
+    s.identify(
+        id,
+        pad.vendor_id().map_or(-1, i32::from),
+        pad.product_id().map_or(-1, i32::from),
     );
     for (i, button) in BUTTONS.iter().enumerate() {
         if let Some(data) = pad.button_data(*button) {

@@ -2755,6 +2755,12 @@ pub unsafe fn gamepad_valid(id: i32) -> bool {
 pub unsafe fn gamepad_device_id(id: i32) -> i32 {
     GAMEPADS.read(id, 0, |_| id)
 }
+pub unsafe fn gamepad_vendor_id(id: i32) -> i32 {
+    GAMEPADS.read(id, -1, |d| d.vendor)
+}
+pub unsafe fn gamepad_product_id(id: i32) -> i32 {
+    GAMEPADS.read(id, -1, |d| d.product)
+}
 pub unsafe fn gamepad_name(id: i32) -> Text {
     Text::new(&GAMEPADS.read(id, String::new(), |d| d.name.clone()))
 }
